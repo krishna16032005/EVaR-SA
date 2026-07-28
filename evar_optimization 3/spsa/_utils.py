@@ -18,18 +18,6 @@ ArrayLike = Union[
 
 OptimizerVariables = TypedDict(
     "OptimizerVariables",
-    x_best=np.ndarray,
-    y_best=np.ndarray,
-    x=np.ndarray,
-    y=float,
-    lr=float,
-    beta_noise=float,
-    beta1=float,
-    beta2=float,
-    noise=float,
-    gradient=np.ndarray,
-    slow_gradient=np.ndarray,
-    square_gradient=np.ndarray,
 )
 
 def type_check(

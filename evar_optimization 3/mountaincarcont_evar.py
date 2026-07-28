@@ -1,5 +1,7 @@
 import gym
 import numpy as np
+if not hasattr(np, "bool8"):
+    np.bool8 = np.bool_
 from matplotlib import pyplot as plt
 import sys
 import csv
