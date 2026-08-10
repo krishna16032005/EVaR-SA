@@ -1,0 +1,5 @@
+torch>=2.0
+gymnasium[classic-control,mujoco]>=1.0
+numpy
+matplotlib
+wandb>=0.16
