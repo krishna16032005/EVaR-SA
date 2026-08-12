@@ -1,0 +1,88 @@
+# EVaR-DeepRL as an SSH dev box for gpud.model, following the group's
+# ssh-server contract: --build-arg USERNAME / --build-arg SSH_KEY, sshd on 22,
+# sudo password == username.
+#
+#   sudo docker build -f Dockerfile.ssh \
+#        --build-arg USERNAME=gade \
+#        --build-arg SSH_KEY="$(cat ~/.ssh/id_ed25519.pub)" \
+#        -t ssh-server/gade .
+#
+# The base already ships torch 2.5.1 built against CUDA 12.4, so `torch>=2.0` in
+# requirements.txt resolves as satisfied and pip does not pull a CPU-only wheel
+# over it. CUDA 12.x has minor-version compatibility: any host driver >= 525 works.
+FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+
+ARG USERNAME=user
+ARG SSH_KEY=""
+ARG UID=1000
+
+# EGL needs the `graphics` capability; the container toolkit's default
+# (compute,utility) omits it and MuJoCo rendering fails with a cryptic EGL error.
+# Headless training never renders, but this makes render() work if you want video.
+ENV DEBIAN_FRONTEND=noninteractive \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
+    MUJOCO_GL=egl \
+    MPLBACKEND=Agg \
+    PYTHONUNBUFFERED=1
+
+# openssh-server + sudo: the dev-box contract. tmux: long runs must survive a
+# dropped SSH session. libgl1/libegl1/libosmesa6: MuJoCo links against these.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openssh-server sudo git tmux htop vim less rsync curl ca-certificates \
+        libgl1 libegl1 libosmesa6 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Key-only login; the account password exists solely for `sudo` inside the box.
+RUN mkdir -p /var/run/sshd \
+    && ssh-keygen -A \
+    && sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config \
+    && sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config \
+    && sed -i 's/^#\?X11Forwarding .*/X11Forwarding yes/' /etc/ssh/sshd_config
+
+# Match the host uid where possible so bind-mounted results stay writable; fall
+# back to an auto-assigned uid if that one is already taken in the base image.
+RUN if getent passwd "${UID}" >/dev/null; then \
+        useradd -m -s /bin/bash "${USERNAME}"; \
+    else \
+        useradd -m -s /bin/bash -u "${UID}" "${USERNAME}"; \
+    fi \
+    && echo "${USERNAME}:${USERNAME}" | chpasswd \
+    && usermod -aG sudo "${USERNAME}" \
+    && mkdir -p "/home/${USERNAME}/.ssh" \
+    && printf '%s\n' "${SSH_KEY}" > "/home/${USERNAME}/.ssh/authorized_keys" \
+    && chmod 700 "/home/${USERNAME}/.ssh" \
+    && chmod 600 "/home/${USERNAME}/.ssh/authorized_keys" \
+    && chown -R "${USERNAME}:${USERNAME}" "/home/${USERNAME}/.ssh"
+
+# sshd sessions do NOT inherit Dockerfile ENV or `docker run -e` variables, so
+# anything the training scripts need (conda's python, MuJoCo's backend, the
+# wandb key) has to be materialised into shell startup files instead.
+RUN printf '%s\n' \
+        'export PATH=/opt/conda/bin:$PATH' \
+        'export MUJOCO_GL=egl' \
+        'export MPLBACKEND=Agg' \
+        'export PYTHONUNBUFFERED=1' \
+        > /etc/profile.d/10-evar.sh \
+    && chmod 644 /etc/profile.d/10-evar.sh \
+    && sed -i '1i [ -f /etc/profile.d/10-evar.sh ] && . /etc/profile.d/10-evar.sh; [ -f /etc/profile.d/20-runtime.sh ] && . /etc/profile.d/20-runtime.sh' \
+        "/home/${USERNAME}/.bashrc"
+
+# Dependency layer first so code-only rebuilds stay cached.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# A snapshot of the code, so the image is usable on its own. Note this is a copy
+# of the EVaR-DeepRL/ subdirectory only -- the .git directory lives one level up
+# (repo root is EVaR-SA/) and is therefore NOT in the build context. For day-to-day
+# work, bind-mount the host clone over this path so `git pull` and wandb's
+# commit tracking work; see DOCKER.md section A2.
+COPY . /home/${USERNAME}/EVaR-DeepRL
+RUN mkdir -p "/home/${USERNAME}/EVaR-DeepRL/results" \
+    && chown -R "${USERNAME}:${USERNAME}" "/home/${USERNAME}/EVaR-DeepRL"
+
+COPY docker/sshd-entrypoint.sh /usr/local/bin/sshd-entrypoint.sh
+RUN chmod +x /usr/local/bin/sshd-entrypoint.sh
+
+EXPOSE 22
+ENTRYPOINT ["/usr/local/bin/sshd-entrypoint.sh"]
+CMD ["/usr/sbin/sshd", "-D", "-e"]

@@ -3,3 +3,6 @@ __pycache__/
 results/
 wandb/
 checkpoints/
+.env
+.env.*
+.claude/

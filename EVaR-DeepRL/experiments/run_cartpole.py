@@ -24,7 +24,7 @@ from evar_deeprl.distributional.iqn import IQNCritic
 from evar_deeprl.logging_utils import add_wandb_args, wandb_config_from_args
 from evar_deeprl.policies.categorical import CategoricalPolicy
 from evar_deeprl.risk.evar import EVaRConfig
-from evar_deeprl.utils import new_run_tag, save_records, state_to_tensor
+from evar_deeprl.utils import new_run_tag, resolve_device, save_records, state_to_tensor
 
 ENV_ID = "CartPole-v1"
 
@@ -50,8 +50,11 @@ def main() -> None:
     parser.add_argument("--checkpoint-every", type=int, default=0, help="episodes between actor/critic checkpoints; 0 disables")
     parser.add_argument("--eval-every", type=int, default=20, help="episodes between deterministic evaluation passes; 0 disables")
     parser.add_argument("--eval-episodes", type=int, default=5, help="episodes per evaluation pass (fixed seed set)")
+    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"], help="'auto' uses CUDA when available, else CPU")
     add_wandb_args(parser)
     args = parser.parse_args()
+
+    device = resolve_device(args.device)
 
     env = gym.make(ENV_ID)
     state_dim = env.observation_space.shape[0]
@@ -91,7 +94,8 @@ def main() -> None:
 
     logs = train(
         env, actor, critic, cfg, state_to_tensor, action_to_env,
-        run_config_extra={"env_id": ENV_ID},
+        device=device,
+        run_config_extra={"env_id": ENV_ID, "device": str(device)},
     )
     save_records(run_dir, f"cartpole_{args.critic}_alpha{args.alpha}", logs)
     print(f"Results dir: {run_dir}")

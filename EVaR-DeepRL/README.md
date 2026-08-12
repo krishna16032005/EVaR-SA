@@ -88,6 +88,17 @@ python experiments/plot_results.py
 `--alpha` is the EVaR confidence level (paper's `alpha`; smaller -> more risk-seeking,
 heavier emphasis on the upper tail).
 
+`--device {auto,cpu,cuda}` selects the compute device (`auto` = CUDA when visible).
+Note that with these small MLPs and single-env rollouts the loop is env/Python-bound,
+so CPU is usually as fast or faster; the GPU matters for wider networks or many IQN
+quantile samples.
+
+To run on a GPU server in a container, see [DOCKER.md](DOCKER.md): part A covers the
+long-lived SSH dev box (`Dockerfile.ssh`, the `ssh-server/<name>` workflow used on
+TUM's gpud.model), part B the one-shot batch container (`Dockerfile` +
+`docker/run.sh`) for plain Docker hosts and Slurm/Enroot clusters. Both cover W&B
+credentials, multi-seed sweeps, and offline sync.
+
 ## Logging: what's tracked, and where it goes
 
 Every run gets its own timestamped subdirectory,

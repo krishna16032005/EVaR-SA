@@ -1,0 +1,13 @@
+# Note: .git isn't listed because it isn't in this build context anyway -- the
+# repo root is the parent directory (EVaR-SA/), not this one. Bind-mount the host
+# clone at run time if you want git metadata (wandb records the commit from it).
+.claude
+__pycache__/
+**/__pycache__/
+*.pyc
+results/
+wandb/
+checkpoints/
+*.pdf
+.env
+.env.*

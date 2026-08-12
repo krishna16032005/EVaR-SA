@@ -13,6 +13,26 @@ def state_to_tensor(obs: np.ndarray) -> torch.Tensor:
     return torch.as_tensor(obs, dtype=torch.float32)
 
 
+def resolve_device(choice: str = "auto") -> torch.device:
+    """Maps a ``--device`` flag to a concrete device.
+
+    ``"auto"`` picks CUDA when a GPU is visible (the usual case inside the
+    container on a GPU host) and falls back to CPU otherwise, so the same command
+    works on a laptop and on the server. An explicit ``"cuda"`` on a machine with
+    no GPU is a mistake worth surfacing, so it raises rather than silently
+    degrading to a 10x-slower CPU run.
+    """
+    if choice == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if choice == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            "--device cuda was requested but torch.cuda.is_available() is False. "
+            "Inside Docker this usually means the container was started without "
+            "`--gpus` (or without the NVIDIA container toolkit installed)."
+        )
+    return torch.device(choice)
+
+
 def new_run_tag() -> str:
     """A timestamp suffix (e.g. ``20260810-153000``) used to keep each run's output
     directory and wandb run name unique so successive runs never overwrite each
