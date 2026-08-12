@@ -66,11 +66,9 @@ else
     echo "[bootstrap] warning: nvidia-smi not found on the host -- GPU runs will fail."
 fi
 
-if "${DOCKER[@]}" ps --format '{{.Ports}}' | grep -q ":$PORT->"; then
-    die "host port $PORT is already published by another container. Pick another:
-  PORT=6731 $0"
-fi
-
+# Resolve our own container FIRST: when replacing it (FORCE=1) it is still
+# holding $PORT, and the port check below would otherwise reject the rebuild
+# because of the very container we are about to remove.
 if "${DOCKER[@]}" ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"; then
     if [ "${FORCE:-0}" = "1" ]; then
         echo "[bootstrap] removing existing container '$CONTAINER' (FORCE=1)"
@@ -80,6 +78,13 @@ if "${DOCKER[@]}" ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"; then
   Restart it:  ${DOCKER[*]} start $CONTAINER
   Replace it:  FORCE=1 $0   (destroys anything not on a bind mount -- see DOCKER.md A6)"
     fi
+fi
+
+# Now any remaining holder of $PORT genuinely belongs to someone else. gpud is a
+# shared machine -- stealing a colleague's port would break their box.
+if "${DOCKER[@]}" ps --format '{{.Names}} {{.Ports}}' | grep ":$PORT->"; then
+    die "host port $PORT is already published by the container listed above.
+  Pick another: PORT=$((PORT + 1)) $0"
 fi
 
 # -------------------------------------------------------------------- build --
