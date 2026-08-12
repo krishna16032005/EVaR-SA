@@ -24,6 +24,13 @@ git clone https://github.com/krishna16032005/EVaR-SA.git && cd EVaR-SA/EVaR-Deep
 SSH_KEY="ssh-ed25519 AAAA… you@laptop" WANDB_API_KEY=<key> ./docker/bootstrap_gpud.sh
 ```
 
+> **Live deployment on gpud.model:** container `evar-gade`, image
+> `ssh-server/gade`, host port **6731** — port 6730 from the group's standard
+> recipe is already held by another user's container (`ssh-server/innushka`), and
+> 6710-6713/6715/6727-6730 are taken too. gpud is shared; check
+> `sudo docker ps` before claiming a port. Reach it with `ssh evar-box` once
+> `~/.ssh/config` has the block from A3.
+
 [`docker/bootstrap_gpud.sh`](docker/bootstrap_gpud.sh) runs the preflight checks,
 builds the image with the right build args, verifies CUDA works inside it,
 starts the container with the flags below, and prints your SSH command. Knobs:
