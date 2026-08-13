@@ -22,6 +22,27 @@ done
 # single-tenant container. See the `docker commit` warning in DOCKER.md.
 chmod 644 "$RUNTIME_ENV"
 
+# Persist SSH host keys across rebuilds.
+#
+# `ssh-keygen -A` runs at build time, so every rebuilt image ships fresh host
+# keys and every client sees REMOTE HOST IDENTIFICATION HAS CHANGED -- the same
+# warning a real man-in-the-middle would produce, which is exactly the warning
+# you do not want people trained to click past. Keeping the keys on the bind
+# mount makes the box's identity stable across rebuilds.
+HOSTKEY_DIR="${EVAR_HOSTKEYS:-${EVAR_REPO:-/home/$EVAR_USER/EVaR-SA/EVaR-DeepRL}/automation/.hostkeys}"
+if [ -d "$(dirname "$HOSTKEY_DIR")" ]; then
+    if ls "$HOSTKEY_DIR"/ssh_host_*_key >/dev/null 2>&1; then
+        cp -a "$HOSTKEY_DIR"/ssh_host_* /etc/ssh/
+        chmod 600 /etc/ssh/ssh_host_*_key
+        echo "[entrypoint] restored persisted SSH host keys (fingerprint unchanged)"
+    else
+        mkdir -p "$HOSTKEY_DIR"
+        cp -a /etc/ssh/ssh_host_* "$HOSTKEY_DIR"/
+        chmod 700 "$HOSTKEY_DIR"
+        echo "[entrypoint] saved SSH host keys to $HOSTKEY_DIR for future rebuilds"
+    fi
+fi
+
 # Optional experiment daemon. Started here rather than by cron so it inherits the
 # container lifecycle: `docker start` brings it back, `--restart unless-stopped`
 # survives a reboot, and there is no second thing to remember to launch.

@@ -8,3 +8,4 @@ checkpoints/
 .claude/
 automation/state/
 automation/logs/
+automation/.hostkeys/
