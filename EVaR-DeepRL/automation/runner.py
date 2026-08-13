@@ -189,9 +189,15 @@ def launch(job: dict, jid: str) -> None:
 def git_pull(branch: str | None = None) -> None:
     try:
         if branch:
+            # Mirror the branch exactly rather than merging it. A fast-forward
+            # merge fails the moment the checked-out branch and the release
+            # branch diverge -- which is precisely the situation this setting
+            # exists for (main collects proposals, the release branch is what
+            # the owner has vetted). Nothing tracked is written on the server,
+            # and results/logs are gitignored, so a hard reset is safe here.
             subprocess.run(["git", "-C", str(REPO), "fetch", "origin", branch],
                            capture_output=True, text=True, timeout=120)
-            cmd = ["git", "-C", str(REPO), "merge", "--ff-only", f"origin/{branch}"]
+            cmd = ["git", "-C", str(REPO), "reset", "--hard", f"origin/{branch}"]
         else:
             cmd = ["git", "-C", str(REPO), "pull", "--ff-only"]
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
