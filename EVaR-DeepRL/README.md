@@ -93,6 +93,8 @@ Note that with these small MLPs and single-env rollouts the loop is env/Python-b
 so CPU is usually as fast or faster; the GPU matters for wider networks or many IQN
 quantile samples.
 
+For the push-to-run experiment lifecycle (edit a queue file, push, read wandb), see [AUTOMATION.md](AUTOMATION.md).
+
 To run on a GPU server in a container, see [DOCKER.md](DOCKER.md): part A covers the
 long-lived SSH dev box (`Dockerfile.ssh`, the `ssh-server/<name>` workflow used on
 TUM's gpud.model), part B the one-shot batch container (`Dockerfile` +

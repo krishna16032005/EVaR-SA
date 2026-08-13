@@ -6,3 +6,5 @@ checkpoints/
 .env
 .env.*
 .claude/
+automation/state/
+automation/logs/

@@ -22,4 +22,22 @@ done
 # single-tenant container. See the `docker commit` warning in DOCKER.md.
 chmod 644 "$RUNTIME_ENV"
 
+# Optional experiment daemon. Started here rather than by cron so it inherits the
+# container lifecycle: `docker start` brings it back, `--restart unless-stopped`
+# survives a reboot, and there is no second thing to remember to launch.
+if [ "${EVAR_AUTORUN:-0}" = "1" ]; then
+    REPO="${EVAR_REPO:-/home/$EVAR_USER/EVaR-SA/EVaR-DeepRL}"
+    if [ -f "$REPO/automation/runner.py" ]; then
+        mkdir -p "$REPO/automation/logs"
+        chown "$EVAR_USER" "$REPO/automation/logs" 2>/dev/null || true
+        su - "$EVAR_USER" -c \
+            "cd '$REPO' && EVAR_REPO='$REPO' nohup python automation/runner.py --loop \
+             >> '$REPO/automation/logs/runner.log' 2>&1 &"
+        echo "[entrypoint] experiment runner started (EVAR_AUTORUN=1), watching $REPO"
+    else
+        echo "[entrypoint] EVAR_AUTORUN=1 but $REPO/automation/runner.py is missing;" \
+             "is the repo bind-mounted? Skipping the runner."
+    fi
+fi
+
 exec "$@"

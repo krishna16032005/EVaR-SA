@@ -1,0 +1,59 @@
+# Experiment queue. Edit, commit, push -- the runner on the GPU server pulls this
+# within one poll interval and starts anything it has not run before.
+#
+# A job's identity is a hash of its own definition, so:
+#   * changing hyperparameters  -> a new job, runs automatically
+#   * leaving a job untouched   -> never re-runs, even after a restart
+#   * wanting a deliberate redo -> bump `rerun` on that job
+#
+# Check what happened:  python automation/runner.py --status
+# Stop everything:      set paused = true below, commit, push
+
+[settings]
+paused = false
+max_parallel = 3      # concurrent experiments; the box has 10 pinned cores
+
+[defaults]
+wandb_project = "evar-deeprl"
+device = "cpu"        # these envs are env/Python-bound; cpu beats cuda until the nets grow
+
+# ---------------------------------------------------------------------------
+# Each [[job]] expands to one run per seed. `args` become CLI flags:
+# underscores turn into dashes, so n_steps -> --n-steps.
+# ---------------------------------------------------------------------------
+
+[[job]]
+name = "cartpole-c51"
+script = "experiments/run_cartpole.py"
+seeds = [0, 1, 2, 3, 4]
+group = "cartpole-c51-alpha0.1"
+tags = ["c51", "cartpole"]
+enabled = true
+[job.args]
+critic = "c51"
+alpha = 0.1
+episodes = 500
+
+[[job]]
+name = "cartpole-iqn"
+script = "experiments/run_cartpole.py"
+seeds = [0, 1, 2, 3, 4]
+group = "cartpole-iqn-alpha0.1"
+tags = ["iqn", "cartpole"]
+enabled = true
+[job.args]
+critic = "iqn"
+alpha = 0.1
+episodes = 500
+
+[[job]]
+name = "invpend-c51"
+script = "experiments/run_invpend.py"
+seeds = [0, 1, 2]
+group = "invpend-c51-alpha0.1"
+tags = ["c51", "invpend"]
+enabled = false        # flip to true when you want the MuJoCo sweep to start
+[job.args]
+critic = "c51"
+alpha = 0.1
+episodes = 1000

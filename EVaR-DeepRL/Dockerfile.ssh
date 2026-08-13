@@ -80,6 +80,12 @@ COPY . /home/${USERNAME}/EVaR-DeepRL
 RUN mkdir -p "/home/${USERNAME}/EVaR-DeepRL/results" \
     && chown -R "${USERNAME}:${USERNAME}" "/home/${USERNAME}/EVaR-DeepRL"
 
+# The entrypoint needs to know which user to run the experiment daemon as; ARGs
+# are not available at run time, so bake it into the environment.
+ENV EVAR_USER=${USERNAME} \
+    EVAR_REPO=/home/${USERNAME}/EVaR-SA/EVaR-DeepRL \
+    EVAR_AUTORUN=0
+
 COPY docker/sshd-entrypoint.sh /usr/local/bin/sshd-entrypoint.sh
 RUN chmod +x /usr/local/bin/sshd-entrypoint.sh
 
