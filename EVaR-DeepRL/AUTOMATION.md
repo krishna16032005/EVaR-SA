@@ -69,6 +69,57 @@ max_parallel = 3      # concurrent experiments (10 cores are pinned to this box)
 Both take effect on the next poll after you push — `paused = true` is the
 emergency brake and needs no SSH.
 
+## Working with collaborators who have no GPU access
+
+The split: **anyone can propose an experiment, only this server can start one.**
+
+```
+collaborator ──push queue.toml──▶ github ──pull──▶ runner marks it "awaiting-approval"
+                                                            │
+   you ──ssh evar-box '… --approve <id>'───────────────────▶ it runs ──▶ wandb
+```
+
+`require_approval = true` (the default in `[settings]`) means a pushed job is
+recorded as a *proposal*, never launched. Approval is a marker file in
+`automation/state/` on the GPU box — deliberately **not** in git — so approving
+requires access to the machine, which only you have. Nothing a collaborator can
+push, including edits to this file or to `[settings]`, can approve their own job.
+
+Your side, from your laptop, no need to enter the box:
+
+```bash
+ssh evar-box 'cd ~/EVaR-SA/EVaR-DeepRL && python automation/runner.py --status'
+ssh evar-box 'cd ~/EVaR-SA/EVaR-DeepRL && python automation/runner.py --approve cartpole-iqn'
+ssh evar-box 'cd ~/EVaR-SA/EVaR-DeepRL && python automation/runner.py --approve all'
+ssh evar-box 'cd ~/EVaR-SA/EVaR-DeepRL && python automation/runner.py --deny cartpole-c51-s3-1a2b3c4d'
+```
+
+`--approve` takes job ids, or a name substring (`cartpole-iqn` approves all its
+seeds), or `all`. `--deny` parks a proposal so it stops showing up as pending.
+
+**Read the diff before approving.** Approval runs collaborator-authored code as
+your user on a shared university machine — that is the real security boundary
+here, not the queue file. The "queued by" line in `--status` is advisory only:
+git authorship is self-reported and forgeable, so it answers "who asked for
+this?", never "is this allowed?".
+
+For your collaborators' side of the loop:
+
+- Have them work on branches and open PRs rather than pushing `main`. You review
+  the code change and the queue entry together, merge, then approve. If you can
+  set branch protection on the repo, require a review on `main` and the whole
+  thing becomes enforced rather than conventional.
+- If you would rather the runner only ever see a branch you control, set
+  `branch = "live"` in `[settings]`; the daemon then fast-forwards to
+  `origin/live` and ignores `main` entirely, so merging into `live` becomes your
+  release gesture.
+- **Invite them to the wandb project** (`deepg98-technical-university-of-munich`
+  → evar-deeprl → Users). They then see every result, chart and config without
+  any server access — which is what they actually need from your GPU.
+
+Working solo on a different project? Set `require_approval = false` and pushes
+run straight away.
+
 ## Checking in
 
 From your laptop, without entering the box:

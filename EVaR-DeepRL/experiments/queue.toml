@@ -11,7 +11,9 @@
 
 [settings]
 paused = false
+require_approval = true   # collaborators can queue proposals; only this server can approve them
 max_parallel = 3      # concurrent experiments; the box has 10 pinned cores
+# branch = "live"        # only fast-forward to this branch; merging into it = your release gesture
 
 [defaults]
 wandb_project = "evar-deeprl"

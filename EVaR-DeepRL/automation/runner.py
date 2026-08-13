@@ -109,10 +109,18 @@ def state_path(jid: str, suffix: str) -> Path:
     return STATE_DIR / f"{jid}.{suffix}"
 
 
-def status_of(jid: str) -> str:
-    for suffix in ("done", "failed", "running"):
+def status_of(jid: str, require_approval: bool = False) -> str:
+    """Terminal states first, then the approval gate, then 'pending'.
+
+    The gate lives in the state directory on the server -- not in git -- which is
+    the whole point: collaborators can push experiment proposals, but only
+    someone with access to this machine can turn one into a running job.
+    """
+    for suffix in ("done", "failed", "running", "denied"):
         if state_path(jid, suffix).exists():
             return suffix
+    if require_approval and not state_path(jid, "approved").exists():
+        return "awaiting-approval"
     return "pending"
 
 
@@ -178,10 +186,15 @@ def launch(job: dict, jid: str) -> None:
     log(f"{jid}: launched (pid {proc.pid})")
 
 
-def git_pull() -> None:
+def git_pull(branch: str | None = None) -> None:
     try:
-        out = subprocess.run(["git", "-C", str(REPO), "pull", "--ff-only"],
-                             capture_output=True, text=True, timeout=120)
+        if branch:
+            subprocess.run(["git", "-C", str(REPO), "fetch", "origin", branch],
+                           capture_output=True, text=True, timeout=120)
+            cmd = ["git", "-C", str(REPO), "merge", "--ff-only", f"origin/{branch}"]
+        else:
+            cmd = ["git", "-C", str(REPO), "pull", "--ff-only"]
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         msg = (out.stdout + out.stderr).strip().splitlines()
         if msg and "Already up to date" not in msg[0]:
             log(f"git: {msg[0]}")
@@ -189,36 +202,99 @@ def git_pull() -> None:
         log(f"git pull failed ({exc!r}); continuing with the current checkout")
 
 
+def who_touched_queue() -> str:
+    """Last author of experiments/queue.toml -- shown when listing proposals.
+
+    Advisory only: git authorship is self-reported and trivially forged. It
+    answers "who asked for this?", never "is this allowed to run?" -- that is
+    what the approval marker on this machine is for.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(REPO), "log", "-1", "--format=%an <%ae>, %ar", "--", str(QUEUE_FILE)],
+            capture_output=True, text=True, timeout=30)
+        return out.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 # ---------------------------------------------------------------------- main --
 def one_pass(max_parallel: int) -> None:
-    git_pull()
+    settings, _ = load_queue()
+    git_pull(settings.get("branch"))
     reconcile()
     settings, jobs = load_queue()
     if settings.get("paused"):
         log("queue is paused (settings.paused = true)")
         return
     max_parallel = settings.get("max_parallel", max_parallel)
+    require_approval = settings.get("require_approval", True)
 
+    new_proposals = []
     for job in jobs:
         jid = job_id(job)
-        if status_of(jid) != "pending":
+        state = status_of(jid, require_approval)
+        if state == "awaiting-approval":
+            # Announce each proposal once, not every poll.
+            marker = state_path(jid, "proposed")
+            if not marker.exists():
+                marker.write_text(f"{job['name']} seed={job['seed']}\nqueued by: {who_touched_queue()}\n")
+                new_proposals.append(jid)
+            continue
+        if state != "pending":
             continue
         if running_count() >= max_parallel:
             log(f"at capacity ({max_parallel}); {jid} waits for a free slot")
             return
         launch(job, jid)
 
+    if new_proposals:
+        log(f"{len(new_proposals)} job(s) awaiting your approval "
+            f"(last queue edit by {who_touched_queue()}):")
+        for jid in new_proposals:
+            log(f"    {jid}")
+        log("approve with: python automation/runner.py --approve <id|all>")
+
 
 def print_status() -> None:
-    _, jobs = load_queue()
+    settings, jobs = load_queue()
+    require_approval = settings.get("require_approval", True)
     if not jobs:
         print("queue is empty or missing:", QUEUE_FILE)
         return
     width = max(len(job_id(j)) for j in jobs)
-    print(f"{'JOB':<{width}}  STATUS   LOG")
+    print(f"approval gate: {'ON' if require_approval else 'OFF'}   "
+          f"last queue edit: {who_touched_queue()}\n")
+    print(f"{'JOB':<{width}}  STATUS             LOG")
     for job in jobs:
         jid = job_id(job)
-        print(f"{jid:<{width}}  {status_of(jid):<8} {LOG_DIR / (jid + '.log')}")
+        print(f"{jid:<{width}}  {status_of(jid, require_approval):<18} {LOG_DIR / (jid + '.log')}")
+
+
+def approve(targets: list[str], deny: bool = False) -> None:
+    """Marks jobs approved (or denied) on this machine, so the daemon may run them."""
+    settings, jobs = load_queue()
+    require_approval = settings.get("require_approval", True)
+    verb = "denied" if deny else "approved"
+    matched = 0
+    for job in jobs:
+        jid = job_id(job)
+        state = status_of(jid, require_approval)
+        wanted = "all" in targets or any(t == jid or t in job["name"] for t in targets)
+        if not wanted or state not in ("awaiting-approval", "denied", "pending"):
+            continue
+        state_path(jid, "denied" if deny else "approved").write_text(
+            f"{verb} at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        if deny:
+            state_path(jid, "approved").unlink(missing_ok=True)
+        else:
+            state_path(jid, "denied").unlink(missing_ok=True)
+        print(f"{verb}: {jid}")
+        matched += 1
+    if not matched:
+        print("nothing matched; run --status to see job ids")
+    elif not deny:
+        print(f"\n{matched} job(s) will start within one poll interval.")
 
 
 def main() -> None:
@@ -226,6 +302,11 @@ def main() -> None:
     parser.add_argument("--loop", action="store_true", help="run continuously (daemon mode)")
     parser.add_argument("--once", action="store_true", help="single pass, then exit")
     parser.add_argument("--status", action="store_true", help="print job states and exit")
+    parser.add_argument("--approve", nargs="+", metavar="ID",
+                        help="approve job ids, name substrings, or 'all' -- the daemon "
+                             "only runs approved jobs while the gate is on")
+    parser.add_argument("--deny", nargs="+", metavar="ID",
+                        help="reject proposals so they stop appearing as pending")
     parser.add_argument("--interval", type=int, default=int(os.environ.get("EVAR_INTERVAL", 60)),
                         help="seconds between passes in --loop mode")
     parser.add_argument("--max-parallel", type=int, default=int(os.environ.get("EVAR_MAX_PARALLEL", 3)),
@@ -237,6 +318,12 @@ def main() -> None:
 
     if args.status:
         print_status()
+        return
+    if args.approve:
+        approve(args.approve)
+        return
+    if args.deny:
+        approve(args.deny, deny=True)
         return
     if args.once:
         one_pass(args.max_parallel)
