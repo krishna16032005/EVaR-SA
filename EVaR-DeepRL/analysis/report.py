@@ -30,6 +30,7 @@ import numpy as np
 # Categorical slots 1-3 of the reference palette, in fixed order. Fixed order
 # matters: a series keeps its colour when a filter changes which runs are
 # present, so "the blue one" means the same method in every figure.
+X_LABEL = ["Episode"]
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]
 INK, INK_SOFT, GRID, SURFACE = "#0b0b0b", "#52514e", "#e6e5e1", "#fcfcfb"
 
@@ -58,7 +59,7 @@ def smooth(y: np.ndarray, window: int) -> np.ndarray:
 
 
 # -------------------------------------------------------------------- sources --
-def collect_csv(results_root: str) -> dict[str, list[dict]]:
+def collect_csv(results_root: str, x_column: str = "global_step") -> dict[str, list[dict]]:
     """Reads results/<env>/<critic>_alpha<a>_seed<s>_<stamp>/*.csv.
 
     Keeps only the **newest run per (group, seed)**: re-running a seed is normal,
@@ -102,8 +103,8 @@ def collect_csv(results_root: str) -> dict[str, list[dict]]:
         for key, *_ in PANELS:
             kind, column = key.split("/", 1)
             table = tables.get(kind, {})
-            if column in table and "global_step" in table:
-                x = np.asarray(table["global_step"], float)
+            if column in table and x_column in table:
+                x = np.asarray(table[x_column], float)
                 y = np.asarray(table[column], float)
                 if x.size > 2 and x.size == y.size:
                     curves[key] = (x, y)
@@ -199,7 +200,7 @@ def render(by_group: dict[str, list[dict]], out_dir: str) -> list[str]:
         if not plotted:
             plt.close(fig)
             continue
-        style_axes(ax, "Environment steps", ylabel, title)
+        style_axes(ax, X_LABEL[0], ylabel, title)
         if plotted > 1:
             leg = ax.legend(frameon=False, fontsize=9, loc="lower right")
             for text in leg.get_texts():
@@ -245,6 +246,11 @@ def summary_table(by_group: dict[str, list[dict]], out_dir: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", choices=["wandb", "csv"], default="wandb")
+    parser.add_argument("--x", choices=["episode", "steps"], default="episode",
+                        help="common x-axis. 'episode' is the default because runs are "
+                             "episode-budgeted: a weaker policy takes fewer env steps for "
+                             "the same 500 episodes, so a step axis truncates the "
+                             "comparison at the worst seed's step count")
     parser.add_argument("--results", default="results", help="results root for --source csv")
     parser.add_argument("--entity", default=os.environ.get(
         "WANDB_ENTITY", "deepg98-technical-university-of-munich"))
@@ -254,7 +260,8 @@ def main() -> None:
     parser.add_argument("--out", default="results/figures")
     args = parser.parse_args()
 
-    by_group = (collect_csv(args.results) if args.source == "csv"
+    x_column = "episode" if args.x == "episode" else "global_step"
+    by_group = (collect_csv(args.results, x_column) if args.source == "csv"
                 else collect_wandb(args.entity, args.project))
     by_group = {g: s for g, s in by_group.items()
                 if (not args.groups or g in args.groups) and g not in (args.exclude or [])}
@@ -264,6 +271,7 @@ def main() -> None:
     for group, seeds in sorted(by_group.items()):
         print(f"{group}: {len(seeds)} seed(s) {sorted(s['seed'] for s in seeds if s['seed'] is not None)}")
 
+    X_LABEL[0] = "Episode" if args.x == "episode" else "Environment steps"
     written = render(by_group, args.out)
     written.append(summary_table(by_group, args.out))
     print("\nwrote:")
