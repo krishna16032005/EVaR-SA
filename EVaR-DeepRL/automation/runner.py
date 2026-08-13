@@ -25,6 +25,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -262,19 +263,67 @@ def one_pass(max_parallel: int) -> None:
         log("approve with: python automation/runner.py --approve <id|all>")
 
 
+EPISODE_RE = re.compile(r"episode\s+(\d+)")
+
+
+def progress_of(jid: str, job: dict) -> str:
+    """How far a run has got, read from its own log tail.
+
+    Uses the training script's own progress lines rather than wandb, so this
+    still answers the question when the network is down or the run is offline.
+    """
+    log_file = LOG_DIR / f"{jid}.log"
+    if not log_file.exists():
+        return ""
+    try:
+        with open(log_file, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 8192))
+            tail = fh.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return ""
+    seen = EPISODE_RE.findall(tail)
+    if not seen:
+        return ""
+    current = int(seen[-1])
+    total = job["args"].get("episodes")
+    if total:
+        return f"ep {current}/{total} ({100 * current // int(total)}%)"
+    return f"ep {current}"
+
+
 def print_status() -> None:
     settings, jobs = load_queue()
     require_approval = settings.get("require_approval", True)
     if not jobs:
         print("queue is empty or missing:", QUEUE_FILE)
         return
-    width = max(len(job_id(j)) for j in jobs)
+
+    rows = [(job_id(j), status_of(job_id(j), require_approval), j) for j in jobs]
+    counts: dict[str, int] = {}
+    for _, state, _ in rows:
+        counts[state] = counts.get(state, 0) + 1
+    finished = counts.get("done", 0) + counts.get("failed", 0)
+    total = len(rows)
+
+    print(f"{finished}/{total} finished ({100 * finished // total}%)   "
+          + "  ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
     print(f"approval gate: {'ON' if require_approval else 'OFF'}   "
+          f"max_parallel: {settings.get('max_parallel', 3)}   "
           f"last queue edit: {who_touched_queue()}\n")
-    print(f"{'JOB':<{width}}  STATUS             LOG")
-    for job in jobs:
-        jid = job_id(job)
-        print(f"{jid:<{width}}  {status_of(jid, require_approval):<18} {LOG_DIR / (jid + '.log')}")
+
+    width = max(len(r[0]) for r in rows)
+    print(f"{'JOB':<{width}}  {'STATUS':<18} PROGRESS")
+    for jid, state, job in rows:
+        detail = progress_of(jid, job) if state in ("running", "done", "failed") else ""
+        print(f"{jid:<{width}}  {state:<18} {detail}")
+
+    if counts.get("awaiting-approval"):
+        print(f"\n{counts['awaiting-approval']} job(s) need approval: "
+              "python automation/runner.py --approve all")
+    if not counts.get("running") and not counts.get("pending") and not counts.get("awaiting-approval"):
+        print("\nQueue is drained -- nothing is running and nothing is waiting. "
+              "Safe to stop the container.")
 
 
 def approve(targets: list[str], deny: bool = False) -> None:
