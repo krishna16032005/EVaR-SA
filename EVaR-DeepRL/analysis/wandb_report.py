@@ -29,15 +29,28 @@ import numpy as np
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]
 INK, INK_SOFT, GRID, SURFACE = "#0b0b0b", "#52514e", "#e6e5e1", "#fcfcfb"
 
-# (wandb key, axis label, figure title, filename stem)
+# (wandb key, axis label, figure title, filename stem, smoothing window)
+# Update-level metrics are logged every few env steps and are far too noisy to
+# read raw -- the spikes hide the trend the panel exists to show. Episode return
+# is already a moving average, so it gets none.
 PANELS = [
     ("episode/return_avg_window", "Episode return (moving average)",
-     "Learning curves", "learning_curves"),
+     "Learning curves", "learning_curves", 0),
     ("update/risk_premium_mean", "EVaR - E[Z]  (risk premium)",
-     "How much the entropic tilt inflates the critic", "risk_premium"),
+     "How much the entropic tilt inflates the critic", "risk_premium", 21),
     ("update/evar_dual_x_mean", "x* = 1/beta*",
-     "Solved EVaR dual variable", "evar_dual"),
+     "Solved EVaR dual variable", "evar_dual", 21),
 ]
+
+
+def smooth(y: np.ndarray, window: int) -> np.ndarray:
+    """Centered moving average, edge-padded so the curve keeps its full span."""
+    if window < 3 or y.size < window:
+        return y
+    pad = window // 2
+    padded = np.pad(y, pad, mode="edge")
+    kernel = np.ones(window) / window
+    return np.convolve(padded, kernel, mode="valid")[: y.size]
 
 
 def style_axes(ax, xlabel: str, ylabel: str, title: str) -> None:
@@ -55,7 +68,8 @@ def style_axes(ax, xlabel: str, ylabel: str, title: str) -> None:
     ax.set_title(title, color=INK, fontsize=12, loc="left", pad=12)
 
 
-def fetch(entity: str, project: str, groups: list[str] | None) -> dict[str, list]:
+def fetch(entity: str, project: str, groups: list[str] | None,
+          exclude: list[str] | None = None) -> dict[str, list]:
     import wandb
     api = wandb.Api()
     runs = api.runs(f"{entity}/{project}")
@@ -65,6 +79,8 @@ def fetch(entity: str, project: str, groups: list[str] | None) -> dict[str, list
             continue
         group = run.group or run.name
         if groups and group not in groups:
+            continue
+        if exclude and group in exclude:
             continue
         by_group[group].append(run)
     return dict(by_group)
@@ -111,15 +127,17 @@ def render(by_group: dict[str, list], out_dir: str) -> list[str]:
     written = []
     order = sorted(by_group)
 
-    for key, ylabel, title, stem in PANELS:
+    for key, ylabel, title, stem, window in PANELS:
         fig, ax = plt.subplots(figsize=(7.2, 4.4), dpi=160)
         fig.patch.set_facecolor(SURFACE)
-        plotted = 0
+        plotted, x_lo, x_hi = 0, None, None
         for i, group in enumerate(order):
             data = series_for(by_group[group], key)
             if data is None:
+                print(f"  note: '{group}' has no usable {key} data; skipped in {stem}")
                 continue
             grid, mean, lo, hi, n = data
+            mean, lo, hi = smooth(mean, window), smooth(lo, window), smooth(hi, window)
             colour = SERIES[i % len(SERIES)]
             ax.fill_between(grid, lo, hi, color=colour, alpha=0.15, linewidth=0, zorder=2)
             ax.plot(grid, mean, color=colour, linewidth=2.0, zorder=3,
@@ -127,6 +145,8 @@ def render(by_group: dict[str, list], out_dir: str) -> list[str]:
             # Direct label at the line end: identity without a legend round-trip.
             ax.annotate(f" {group}", (grid[-1], mean[-1]), color=colour,
                         fontsize=9, va="center", ha="left", zorder=4)
+            x_lo = grid[0] if x_lo is None else min(x_lo, grid[0])
+            x_hi = grid[-1] if x_hi is None else max(x_hi, grid[-1])
             plotted += 1
 
         if not plotted:
@@ -138,7 +158,9 @@ def render(by_group: dict[str, list], out_dir: str) -> list[str]:
             leg = ax.legend(frameon=False, fontsize=9, loc="lower right")
             for text in leg.get_texts():
                 text.set_color(INK_SOFT)      # text wears ink, not the series colour
-        ax.margins(x=0.18)                     # room for the direct labels
+        # Pad only the right, for the direct labels. Symmetric margins pushed the
+        # axis to negative environment steps, a range that cannot exist.
+        ax.set_xlim(x_lo, x_hi + 0.22 * (x_hi - x_lo))
         fig.tight_layout()
         for ext in ("png", "pdf"):
             path = os.path.join(out_dir, f"{stem}.{ext}")
@@ -190,10 +212,12 @@ def main() -> None:
     parser.add_argument("--project", default=os.environ.get("WANDB_PROJECT", "evar-deeprl"))
     parser.add_argument("--groups", nargs="*", default=None,
                         help="wandb groups to include (default: all in the project)")
+    parser.add_argument("--exclude", nargs="*", default=["pipeline-smoke"],
+                        help="groups to leave out (default: the infra smoke-test group)")
     parser.add_argument("--out", default="results/figures")
     args = parser.parse_args()
 
-    by_group = fetch(args.entity, args.project, args.groups)
+    by_group = fetch(args.entity, args.project, args.groups, args.exclude)
     if not by_group:
         print("no runs matched -- check --entity/--project/--groups")
         return
