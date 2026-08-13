@@ -341,4 +341,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BrokenPipeError:
+        # `--status | head` closes the pipe early; that is not an error worth a
+        # traceback. Redirect stdout to devnull so the interpreter's own flush
+        # at exit cannot raise a second time.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except KeyboardInterrupt:
+        pass
