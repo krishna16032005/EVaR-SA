@@ -104,6 +104,27 @@ def evar_from_distribution(
 
     log_alpha = math.log(config.alpha)
 
+    # The saturated regime. G'(0+) = log(p_max / alpha), where p_max is the mass on
+    # the largest atom, so as soon as p_max >= alpha the objective is non-decreasing
+    # on the whole interval and the infimum sits at x -> 0, where G -> z_max. EVaR
+    # then *is* the maximum, exactly -- there is no interior optimum to find.
+    #
+    # This is not a corner case here. Returns are integer-valued and CartPole caps
+    # episodes at 500, so ties at the maximum are routine: a policy that reaches the
+    # ceiling on more than an alpha-fraction of evaluation episodes saturates the
+    # measure. Bisecting anyway lands on x_min and returns z_max + x_min*log(1/alpha),
+    # overshooting the true value and breaking the E[Z] <= EVaR <= max(Z) invariant
+    # by ~0.005 -- which is how this regime first showed up, as bounds-check failures
+    # on 5-10% of evals. Returning z_max exactly keeps the invariant; x* is reported
+    # at x_min so `at_bound` still flags that the estimate has saturated and is no
+    # longer a tail *average*.
+    weights_lin = log_weights.exp()
+    positive = weights_lin > 0
+    masked = torch.where(positive, atoms, atoms.new_full((), -float("inf")).expand_as(atoms))
+    z_max = masked.max(dim=-1).values
+    p_max = (weights_lin * (atoms == z_max.unsqueeze(-1)) * positive).sum(dim=-1)
+    saturated = p_max >= config.alpha
+
     def _g_prime(x: torch.Tensor) -> torch.Tensor:
         """G'(x) = (log E[exp(Z/x)] - log alpha) - E_Qx[Z] / x, with x of shape (batch, 1)."""
         tilt_logits = log_weights + atoms / x
@@ -139,6 +160,11 @@ def evar_from_distribution(
     x_star = x_star.detach()
     log_mgf_final = _log_mgf(atoms, log_weights, x_star.unsqueeze(-1))
     evar = x_star * (log_mgf_final - log_alpha)
+
+    # Splice in the saturated elements. z_max carries a gradient to the maximising
+    # atom, which is the correct derivative there: in this regime EVaR *is* that atom.
+    evar = torch.where(saturated, z_max, evar)
+    x_star = torch.where(saturated, x_star.new_full((), config.x_min), x_star)
     return evar, x_star
 
 

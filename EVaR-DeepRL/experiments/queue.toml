@@ -47,7 +47,7 @@ tags = ["c51", "alpha-sweep"]
 critic = "c51"
 alpha = 0.01
 episodes = 2000
-eval_risk_episodes = 50
+eval_risk_episodes = 500
 
 [[job]]
 name = "cartpole-c51-a005"
@@ -59,7 +59,7 @@ tags = ["c51", "alpha-sweep"]
 critic = "c51"
 alpha = 0.05
 episodes = 2000
-eval_risk_episodes = 50
+eval_risk_episodes = 500
 
 [[job]]
 name = "cartpole-c51-a01"
@@ -71,7 +71,7 @@ tags = ["c51", "alpha-sweep"]
 critic = "c51"
 alpha = 0.1
 episodes = 2000
-eval_risk_episodes = 50
+eval_risk_episodes = 500
 
 [[job]]
 name = "cartpole-c51-a03"
@@ -83,7 +83,7 @@ tags = ["c51", "alpha-sweep"]
 critic = "c51"
 alpha = 0.3
 episodes = 2000
-eval_risk_episodes = 50
+eval_risk_episodes = 500
 
 [[job]]
 name = "cartpole-c51-a10-control"
@@ -95,7 +95,7 @@ tags = ["c51", "alpha-sweep", "risk-neutral-control"]
 critic = "c51"
 alpha = 1.0
 episodes = 2000
-eval_risk_episodes = 50
+eval_risk_episodes = 500
 
 # ===========================================================================
 # PHASE 2 -- critic class at the reference alpha, on the longer budget.
@@ -111,7 +111,7 @@ tags = ["iqn", "critic-ablation"]
 critic = "iqn"
 alpha = 0.1
 episodes = 2000
-eval_risk_episodes = 50
+eval_risk_episodes = 500
 
 # ===========================================================================
 # PHASE 3 -- the paper's own environment, so the deep numbers can sit beside
@@ -129,7 +129,7 @@ enabled = false
 critic = "c51"
 alpha = 0.1
 episodes = 1500
-eval_risk_episodes = 50
+eval_risk_episodes = 500
 
 [[job]]
 name = "invpend-iqn-a01"
@@ -142,4 +142,4 @@ enabled = false
 critic = "iqn"
 alpha = 0.1
 episodes = 1500
-eval_risk_episodes = 50
+eval_risk_episodes = 500
