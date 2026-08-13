@@ -11,6 +11,10 @@
 #   SSH_KEY     path to, or contents of, your LAPTOP's public key   (required)
 #   PORT        host port published to the container's 22   (default: 6730)
 #   CPUS        --cpus value        (default: 10)
+#   CPUSET      --cpuset-cpus value (default: unset; e.g. "38-47")
+#               On the i7 group's shared box the convention is to pin each
+#               container to its own 10-core block so users don't fight over the
+#               same cores -- see /common/docker-server/current-containers.
 #   MEMORY      --memory value      (default: 64g)
 #   GPUS        --gpus value        (default: all; e.g. '"device=0"')
 #   WANDB_API_KEY   bridged into SSH sessions by the container entrypoint
@@ -112,6 +116,9 @@ run_args=(
     -d --name "$CONTAINER"
     --cpus="$CPUS" --memory="$MEMORY" --shm-size=8g
     --gpus "$GPUS"
+)
+[ -n "${CPUSET:-}" ] && run_args+=(--cpuset-cpus="$CPUSET")
+run_args+=(
     -p "$PORT:22"
     # The host clone, not the image's baked-in copy: keeps results across
     # `docker rm`, and carries the .git dir that lives at the repo root.
