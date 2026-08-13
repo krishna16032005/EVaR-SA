@@ -34,7 +34,7 @@ from __future__ import annotations
 import copy
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Literal
 
 import numpy as np
@@ -42,7 +42,7 @@ import torch
 import torch.nn as nn
 
 from evar_deeprl.logging_utils import RunLogger, WandbConfig
-from evar_deeprl.risk.evar import EVaRConfig
+from evar_deeprl.risk.evar import EVaRConfig, evar_from_distribution
 
 
 def make_target(net: nn.Module) -> nn.Module:
@@ -82,6 +82,15 @@ class TrainConfig:
     checkpoint_dir: str = "checkpoints"
     eval_every: int = 20  # episodes between deterministic evaluation passes; 0 disables.
     eval_episodes: int = 5  # episodes per evaluation pass, run on a fixed seed set.
+    # These nets are tiny, so intra-op parallelism costs more in thread sync than
+    # it saves -- and when a sweep runs N of these at once on the same cores, each
+    # process spawning one thread per core makes them fight. One thread per run,
+    # many runs in parallel, is strictly faster here. 0 leaves torch's default.
+    torch_threads: int = 1
+    # Episodes for the stochastic pass that measures the objective itself. Needs
+    # to be large enough for a tail estimate: EVaR at alpha=0.1 over 5 episodes is
+    # decided by a single sample.
+    eval_risk_episodes: int = 30
 
 
 @dataclass
@@ -150,6 +159,42 @@ def _log_return_distribution(logger: RunLogger, critic: nn.Module, probe_state: 
             logger.log_histogram("return_distribution/iqn_probe_state", samples, step=step)
 
 
+def objective_metrics(returns: np.ndarray, cfg: TrainConfig) -> dict:
+    """The paper's objective, measured on returns rather than estimated by the critic.
+
+    ``J_EVaR(theta) = EVaR_alpha[R(tau)]`` with ``tau ~ pi_theta``, so this is the
+    quantity the method claims to maximise -- computed here from an empirical
+    sample of trajectory returns with the same solver the critic uses, which is
+    what makes it comparable to the SPSA results in the paper.
+
+    The dual search interval is re-derived from the observed spread: the training
+    ``EVaRConfig`` sizes ``[x_min, x_max]`` to the *critic's* support, and using
+    that here would clip ``x*`` whenever the empirical returns are wider, silently
+    biasing the number that goes in the table.
+    """
+    if returns.size == 0:
+        return {}
+    spread = float(returns.max() - returns.min())
+    eval_cfg = replace(cfg.evar, x_min=1e-3, x_max=max(2.0 * spread, 1.0))
+    atoms = torch.as_tensor(returns, dtype=torch.float32).unsqueeze(0)
+    evar, x_star = evar_from_distribution(atoms, None, eval_cfg)
+
+    # Risk-*seeking* means the upper tail is the target, so the tail statistics
+    # reported here are upper-tail: the mean of the best alpha-fraction, not the
+    # worst. Reporting the conventional lower-tail CVaR would score the method on
+    # the opposite of what it optimises.
+    ordered = np.sort(returns)[::-1]
+    k = max(1, int(np.ceil(cfg.evar.alpha * ordered.size)))
+    return {
+        "eval_evar": float(evar.item()),
+        "eval_evar_dual_x": float(x_star.item()),
+        "eval_cvar_upper": float(ordered[:k].mean()),
+        "eval_top_decile_mean": float(ordered[: max(1, ordered.size // 10)].mean()),
+        "eval_return_p90": float(np.percentile(returns, 90)),
+        "eval_return_p10": float(np.percentile(returns, 10)),
+    }
+
+
 def evaluate_policy(
     env,
     actor: nn.Module,
@@ -180,6 +225,7 @@ def evaluate_policy(
             for _ in range(cfg.max_steps_per_episode):
                 state_t = state_to_tensor(obs).to(device).unsqueeze(0)
                 action_t = actor.act_deterministic(state_t).squeeze(0)
+                # (deterministic pass -- kept for a stable, comparable curve)
                 env_action = action_to_env(action_t)
                 obs, reward, terminated, truncated, _ = env.step(env_action)
                 ep_return += reward
@@ -188,9 +234,28 @@ def evaluate_policy(
                     break
             returns.append(ep_return)
             lengths.append(ep_len)
+
+        # Stochastic pass: the objective is EVaR over trajectories drawn from the
+        # policy, so it can only be measured by sampling actions. The
+        # deterministic pass above has (near) zero return spread, which would make
+        # the measured EVaR collapse onto the mean and hide the whole effect.
+        risk_returns: list[float] = []
+        for i in range(cfg.eval_risk_episodes):
+            obs, _ = env.reset(seed=cfg.seed + 2_000_000 + i)
+            ep_return = 0.0
+            for _ in range(cfg.max_steps_per_episode):
+                state_t = state_to_tensor(obs).to(device).unsqueeze(0)
+                action_t, _, _ = actor.act_with_entropy(state_t)
+                obs, reward, terminated, truncated, _ = env.step(
+                    action_to_env(action_t.squeeze(0)))
+                ep_return += reward
+                if terminated or truncated:
+                    break
+            risk_returns.append(ep_return)
     actor.train(was_training)
 
     returns_arr = np.asarray(returns, dtype=float)
+    risk_arr = np.asarray(risk_returns, dtype=float)
     return {
         "eval_episodes": cfg.eval_episodes,
         "eval_return_mean": float(returns_arr.mean()),
@@ -198,6 +263,10 @@ def evaluate_policy(
         "eval_return_min": float(returns_arr.min()),
         "eval_return_max": float(returns_arr.max()),
         "eval_length_mean": float(np.mean(lengths)),
+        "eval_risk_episodes": int(risk_arr.size),
+        "eval_risk_return_mean": float(risk_arr.mean()) if risk_arr.size else 0.0,
+        "eval_risk_return_std": float(risk_arr.std()) if risk_arr.size > 1 else 0.0,
+        **objective_metrics(risk_arr, cfg),
     }
 
 
@@ -230,6 +299,8 @@ def train(
         :func:`evar_deeprl.utils.save_records` or direct ``pandas.DataFrame``
         construction; ``wandb_run_id`` is set whenever wandb logging was active.
     """
+    if cfg.torch_threads:
+        torch.set_num_threads(cfg.torch_threads)
     device = device or torch.device("cpu")
     actor.to(device)
     critic.to(device)
@@ -289,8 +360,14 @@ def train(
         polyak_update(target_critic, critic, cfg.target_tau)
 
         with torch.no_grad():
-            evar_s, x_star_s = _critic_evar(critic, states, cfg)
-            evar_s_next, _ = _critic_evar(critic, next_states, cfg)
+            # One critic forward and one Newton solve over the concatenated batch
+            # instead of two of each: the EVaR solve is the costliest part of the
+            # update, and s / s' need identical treatment anyway.
+            batch = states.shape[0]
+            both = torch.cat([states, next_states], dim=0)
+            evar_both, x_star_both = _critic_evar(critic, both, cfg)
+            evar_s, evar_s_next = evar_both[:batch], evar_both[batch:]
+            x_star_s = x_star_both[:batch]
             value_s = _critic_mean_value(critic, states, cfg)
             raw_advantage = rewards + cfg.gamma * (1.0 - dones) * evar_s_next - evar_s
             if raw_advantage.numel() > 1:
@@ -352,8 +429,7 @@ def train(
 
             for step in range(cfg.max_steps_per_episode):
                 state_t = state_to_tensor(obs).to(device)
-                action_t, log_prob = actor.act(state_t.unsqueeze(0))
-                entropy = actor.entropy(state_t.unsqueeze(0))
+                action_t, log_prob, entropy = actor.act_with_entropy(state_t.unsqueeze(0))
 
                 env_action = action_to_env(action_t.squeeze(0))
                 next_obs, reward, terminated, truncated, _ = env.step(env_action)

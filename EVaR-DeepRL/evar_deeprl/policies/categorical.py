@@ -26,6 +26,16 @@ class CategoricalPolicy(nn.Module):
         action = dist.sample()
         return action, dist.log_prob(action)
 
+    def act_with_entropy(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """One forward pass yielding action, log-prob and entropy together.
+
+        The rollout needs all three every step; calling ``act`` then ``entropy``
+        builds the distribution -- and so runs the network -- twice per env step.
+        """
+        dist = self.distribution(state)
+        action = dist.sample()
+        return action, dist.log_prob(action), dist.entropy()
+
     def act_deterministic(self, state: torch.Tensor) -> torch.Tensor:
         """Greedy (argmax) action, used for evaluation -- no exploration noise."""
         return self.net(state).argmax(dim=-1)

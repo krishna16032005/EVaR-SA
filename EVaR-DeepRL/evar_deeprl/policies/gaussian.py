@@ -43,6 +43,17 @@ class GaussianPolicy(nn.Module):
         log_prob = dist.log_prob(raw_action).sum(dim=-1)
         return action, log_prob
 
+    def act_with_entropy(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """One forward pass yielding action, log-prob and entropy together.
+
+        The rollout needs all three every step; calling ``act`` then ``entropy``
+        builds the distribution -- and so runs the network -- twice per env step.
+        """
+        dist = self.distribution(state)
+        raw_action = dist.rsample()
+        action = torch.clamp(raw_action, -self.action_bound, self.action_bound)
+        return action, dist.log_prob(raw_action).sum(dim=-1), dist.entropy().sum(dim=-1)
+
     def act_deterministic(self, state: torch.Tensor) -> torch.Tensor:
         """Mean action, used for evaluation -- no exploration noise."""
         return torch.clamp(self.distribution(state).mean, -self.action_bound, self.action_bound)

@@ -60,6 +60,8 @@ def main() -> None:
     parser.add_argument("--checkpoint-every", type=int, default=0, help="episodes between actor/critic checkpoints; 0 disables")
     parser.add_argument("--eval-every", type=int, default=20, help="episodes between deterministic evaluation passes; 0 disables")
     parser.add_argument("--eval-episodes", type=int, default=5, help="episodes per evaluation pass (fixed seed set)")
+    parser.add_argument("--eval-risk-episodes", type=int, default=30, help="stochastic episodes used to measure EVaR of the return distribution; 0 disables")
+    parser.add_argument("--torch-threads", type=int, default=1, help="intra-op threads per run; 1 is fastest when several runs share cores")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"], help="'auto' uses CUDA when available, else CPU")
     add_wandb_args(parser)
     args = parser.parse_args()
@@ -96,6 +98,8 @@ def main() -> None:
         checkpoint_dir=os.path.join(run_dir, "checkpoints"),
         eval_every=args.eval_every,
         eval_episodes=args.eval_episodes,
+        eval_risk_episodes=args.eval_risk_episodes,
+        torch_threads=args.torch_threads,
     )
     cfg.wandb.run_name = run_name
     cfg.wandb.tags = tuple(cfg.wandb.tags) + (args.env, args.critic)
