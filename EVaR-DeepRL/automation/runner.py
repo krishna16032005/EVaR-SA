@@ -61,20 +61,24 @@ def load_queue() -> tuple[dict, list[dict]]:
         merged = {**defaults, **spec}
         args = {**defaults.get("args", {}), **spec.get("args", {})}
         for seed in merged.get("seeds", [0]):
-            jobs.append(
-                {
-                    "name": merged["name"],
-                    "script": merged["script"],
-                    "device": merged.get("device", "auto"),
-                    "group": merged.get("group", merged["name"]),
-                    "project": merged.get("wandb_project", "evar-deeprl"),
-                    "entity": merged.get("wandb_entity"),
-                    "tags": merged.get("tags", []),
-                    "args": args,
-                    "seed": seed,
-                    "rerun": merged.get("rerun", 0),
-                }
-            )
+            entry = {
+                "name": merged["name"],
+                "script": merged["script"],
+                "device": merged.get("device", "auto"),
+                "group": merged.get("group", merged["name"]),
+                "project": merged.get("wandb_project", "evar-deeprl"),
+                "entity": merged.get("wandb_entity"),
+                "tags": merged.get("tags", []),
+                "args": args,
+                "seed": seed,
+                "rerun": merged.get("rerun", 0),
+            }
+            # Only recorded when explicitly set. job_id() hashes this whole dict,
+            # so adding the key unconditionally would change the identity of every
+            # existing job and silently re-run finished work.
+            if merged.get("python"):
+                entry["python"] = merged["python"]
+            jobs.append(entry)
     return settings, jobs
 
 
@@ -85,7 +89,10 @@ def job_id(job: dict) -> str:
 
 
 def build_command(job: dict) -> list[str]:
-    cmd = [sys.executable, job["script"],
+    # `python` lets a job run in a different interpreter than the runner's own.
+    # safety-gymnasium pins gymnasium==0.28.1 / mujoco==2.3.3, which cannot coexist
+    # with the main environment, so its jobs point at ~/envs/safety instead.
+    cmd = [os.path.expanduser(job.get("python") or sys.executable), job["script"],
            "--seed", str(job["seed"]),
            "--device", job["device"],
            "--wandb-mode", "online",

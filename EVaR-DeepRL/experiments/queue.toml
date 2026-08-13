@@ -143,3 +143,67 @@ critic = "iqn"
 alpha = 0.1
 episodes = 1500
 eval_risk_episodes = 500
+
+# ===========================================================================
+# PHASE 4 -- Safety-Gymnasium: an environment that actually has risk.
+#
+# CartPole cannot support C1. It is deterministic bar a +/-0.05 initial state,
+# its return is capped at 500 (so the upper tail EVaR is defined on is censored,
+# and EVaR saturates onto the cap once p_max >= alpha), and -- decisively -- its
+# risk-neutral and risk-seeking optima are the same policy. alpha cannot matter
+# there, which is what the first clean sweep showed: tail statistics went
+# 105 -> 118 -> 199 -> 125 -> 149 with seed sd of +/-95 to +/-150.
+#
+# These jobs run in a separate interpreter: safety-gymnasium pins
+# gymnasium==0.28.1 / mujoco==2.3.3, which cannot coexist with the main env
+# (gymnasium 1.3.0, mujoco 3.11.0). See DOCKER.md for building ~/envs/safety.
+#
+# STEP 1, and the reason both blocks are disabled: calibrate lambda before
+# sweeping alpha. Measured on a random policy over 1000 steps, raw reward return
+# is ~0.19 (max 3.55) against raw cost ~104 (max 669) -- so at lambda = 1 the
+# priced return is essentially negative cost, the task collapses to pure
+# avoidance, and there is no risk/reward tension for alpha to trade off. The
+# lambda that puts the two terms in the same range for a *trained* agent has to
+# be found empirically. Enable this block first, read
+# episode/episode_cost against episode return, then set the alpha sweep's lambda.
+# ===========================================================================
+
+[[job]]
+name = "safety-pointgoal1-lambda-calib"
+script = "experiments/run_safety.py"
+python = "~/envs/safety/bin/python"
+seeds = [0, 1]
+group = "safety-pointgoal1-lambda-calib"
+tags = ["c51", "safety-gymnasium", "lambda-calibration"]
+enabled = false
+[job.args]
+env = "SafetyPointGoal1-v0"
+critic = "c51"
+alpha = 0.1
+cost_penalty = 0.25
+episodes = 1000
+n_atoms = 101
+eval_risk_episodes = 500
+
+# STEP 2 -- the alpha sweep, once lambda is known to produce real tail spread.
+# Set cost_penalty here to whatever step 1 selects. alpha = 1.0 is the control.
+# Note alpha > 1/n_atoms and alpha > 1/eval_risk_episodes both bind: at 101 atoms
+# and 500 eval episodes the floors are 0.0099 and 0.002, so alpha = 0.01 is only
+# just admissible -- run_safety.py refuses anything below either floor.
+
+[[job]]
+name = "safety-pointgoal1-alpha-sweep"
+script = "experiments/run_safety.py"
+python = "~/envs/safety/bin/python"
+seeds = [0, 1, 2, 3, 4]
+group = "safety-pointgoal1-alpha-sweep"
+tags = ["c51", "safety-gymnasium", "alpha-sweep"]
+enabled = false
+[job.args]
+env = "SafetyPointGoal1-v0"
+critic = "c51"
+alpha = 0.1
+cost_penalty = 0.25
+episodes = 2000
+n_atoms = 101
+eval_risk_episodes = 500
