@@ -363,3 +363,44 @@ results/wandb/         # wandb's own run directories
 
 Every run gets its own timestamped directory, so reruns never overwrite each
 other, and the same tag appears in the W&B run name for matching them up.
+
+## The Safety-Gymnasium environment (a second interpreter)
+
+`experiments/run_safety.py` cannot run in the main environment.
+`safety-gymnasium` pins `gymnasium==0.28.1`, `mujoco==2.3.3` and `pygame==2.1.0`
+exactly, while the box runs gymnasium 1.3.0 and mujoco 3.11.0 — and
+`run_invpend.py` needs `InvertedPendulum-v5`, an id that does not exist in
+gymnasium 0.28. Installing it into the shared env would downgrade both libraries
+under every other experiment. Concretely it also fails outright: `safety_gymnasium`
+imports `gymnasium.wrappers.compatibility.EnvCompatibility`, removed in
+gymnasium 1.0.
+
+So it gets its own interpreter:
+
+```bash
+./docker/setup_safety_env.sh      # builds ~/envs/safety, ~5 minutes
+```
+
+Python 3.10, because `pygame==2.1.0` has no cp311 wheel and building it needs
+SDL2 headers the image does not carry. The script finishes by making and
+stepping `SafetyPointGoal1-v0` headless, so a silent GL failure surfaces at build
+time rather than inside a queued job.
+
+Queue jobs reach it with the `python` field:
+
+```toml
+[[job]]
+script = "experiments/run_safety.py"
+python = "~/envs/safety/bin/python"
+```
+
+`python` is optional and is recorded on a job only when set, so adding it does
+not change the identity hash of any job that does not use it. Rendering needs
+`MUJOCO_GL=egl`, which the container already exports (the runner inherits it).
+
+Run it by hand the same way:
+
+```bash
+MUJOCO_GL=egl ~/envs/safety/bin/python experiments/run_safety.py \
+    --env SafetyPointGoal1-v0 --alpha 0.1 --cost-penalty 0.25 --episodes 1000
+```
