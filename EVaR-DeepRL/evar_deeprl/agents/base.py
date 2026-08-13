@@ -185,9 +185,20 @@ def objective_metrics(returns: np.ndarray, cfg: TrainConfig) -> dict:
     # the opposite of what it optimises.
     ordered = np.sort(returns)[::-1]
     k = max(1, int(np.ceil(cfg.evar.alpha * ordered.size)))
+    evar_v = float(evar.item())
+    # EVaR is a coherent upper-tail measure, so E[Z] <= EVaR_alpha[Z] <= max(Z) holds
+    # for every alpha. Logged rather than asserted: a violation means the solver is
+    # wrong, and that is a fact about the run which belongs on the dashboard next to
+    # the number it invalidates -- not a crash that loses the rest of the sweep.
+    lo, hi = float(returns.mean()), float(returns.max())
+    tol = 1e-6 * max(1.0, abs(hi))
     return {
-        "eval_evar": float(evar.item()),
+        "eval_evar": evar_v,
         "eval_evar_dual_x": float(x_star.item()),
+        "eval_evar_within_bounds": float(lo - tol <= evar_v <= hi + tol),
+        "eval_evar_at_bound": float(
+            x_star.item() <= eval_cfg.x_min * 1.001 or x_star.item() >= eval_cfg.x_max * 0.999
+        ),
         "eval_cvar_upper": float(ordered[:k].mean()),
         "eval_top_decile_mean": float(ordered[: max(1, ordered.size // 10)].mean()),
         "eval_return_p90": float(np.percentile(returns, 90)),
@@ -327,7 +338,7 @@ def train(
         "evar_alpha": cfg.evar.alpha,
         "evar_x_min": cfg.evar.x_min,
         "evar_x_max": cfg.evar.x_max,
-        "evar_newton_steps": cfg.evar.newton_steps,
+        "evar_solver_steps": cfg.evar.solver_steps,
         "seed": cfg.seed,
         **(run_config_extra or {}),
     }
@@ -401,6 +412,18 @@ def train(
             "evar_next_mean": float(evar_s_next.mean().item()),
             "risk_premium_mean": float((evar_s - value_s).mean().item()),
             "evar_dual_x_mean": float(x_star_s.mean().item()),
+            "evar_dual_x_std": float(x_star_s.std().item()) if x_star_s.numel() > 1 else 0.0,
+            # Tripwire. For alpha < 1 the dual optimum is interior, so a healthy solve
+            # leaves this at 0. It sat at 1.0 for every update of every earlier run --
+            # x* pinned to a bound, which silently degrades EVaR into fixed-beta
+            # entropic utility at beta = 1/x_max. Watch it in wandb: if this leaves 0,
+            # the risk operator is not the one the paper describes.
+            "evar_dual_x_at_bound_frac": float(
+                (
+                    (x_star_s <= cfg.evar.x_min * 1.001)
+                    | (x_star_s >= cfg.evar.x_max * 0.999)
+                ).float().mean().item()
+            ),
             "advantage_raw_mean": float(raw_advantage.mean().item()),
             "advantage_raw_std": float(raw_advantage.std().item()) if raw_advantage.numel() > 1 else 0.0,
             "advantage_raw_min": float(raw_advantage.min().item()),

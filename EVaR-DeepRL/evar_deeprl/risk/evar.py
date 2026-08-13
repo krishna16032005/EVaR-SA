@@ -15,12 +15,13 @@ categorical weights or uniform quantile weights). That means EVaR can be evaluat
 
 via the convex reparameterisation ``x = 1/beta`` used in the paper's Proposition 1 /
 Theorem 1 (``G(x)`` is strongly convex on a compact interval), instead of via an outer
-SPSA loop. We solve the 1-D convex problem with a handful of projected Newton steps,
-unrolled so that gradients can flow back into both the critic and (through the
-resulting EVaR-advantage) the actor.
+SPSA loop. We solve the 1-D convex problem by bisecting its monotone derivative, and
+recover gradients into the critic (and through the EVaR-advantage into the actor) via
+the envelope theorem rather than by unrolling the solver.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -33,8 +34,7 @@ class EVaRConfig:
     alpha: float = 0.1
     x_min: float = 1e-2
     x_max: float = 50.0
-    newton_steps: int = 15
-    init_x: float = 1.0
+    solver_steps: int = 30
 
 
 def _log_mgf(atoms: torch.Tensor, log_weights: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
@@ -55,8 +55,8 @@ def evar_from_distribution(
     """Compute EVaR_alpha of a batch of empirical return distributions.
 
     Implements Corollary 1 / Theorem 1: minimise the strongly convex
-    ``G(x) = x * (log E[exp(Z/x)] - log alpha)`` over ``x in [x_min, x_max]`` with
-    projected Newton iterations, then evaluate ``G`` at the solution.
+    ``G(x) = x * (log E[exp(Z/x)] - log alpha)`` over ``x in [x_min, x_max]`` by
+    bisecting ``G'`` in log ``x``, then evaluate ``G`` at the solution.
 
     Args:
         atoms: (batch, N) tensor of return atoms/samples (e.g. C51 support or IQN
@@ -76,33 +76,68 @@ def evar_from_distribution(
     n = atoms.shape[-1]
 
     if weights is None:
-        log_weights = atoms.new_full(atoms.shape, -float(torch.log(torch.tensor(float(n)))))
+        log_weights = atoms.new_full(atoms.shape, -math.log(float(n)))
     else:
-        log_weights = torch.log(weights.clamp_min(1e-12))
+        # A floor of 1e-12 here is not a harmless guard against log(0): it *invents*
+        # mass of 1e-12 on atoms whose true probability is zero, and the tilt
+        # exp(Z/x) then multiplies that fake mass by e^(z_max/x). On the C51 support
+        # (up to 500) with x ~ 11 that is a factor of e^45, so a floored atom at the
+        # top of the support can dominate Q_x outright and pull EVaR up by ~13%.
+        # Mask genuine zeros to -inf instead -- logsumexp and softmax both handle it
+        # exactly -- and floor only to the dtype's smallest normal, which is ~7x
+        # further down in log space than 1e-12.
+        tiny = torch.finfo(weights.dtype).tiny
+        log_weights = torch.log(weights.clamp_min(tiny))
+        log_weights = torch.where(
+            weights > 0, log_weights, torch.full_like(log_weights, -float("inf"))
+        )
 
-    log_alpha = float(torch.log(torch.tensor(config.alpha)))
+    # alpha = 1 is the risk-neutral control, and there EVaR_1[Z] = E[Z] exactly:
+    # the dual optimum sits at x -> infinity, so *any* finite x_max leaves a
+    # positive bias of order Var[Z] / (2 x_max). That bias is small (~2%), which is
+    # precisely what makes it dangerous -- it is easy to read as sampling noise in
+    # the one experiment whose whole job is to detect a broken operator.
+    if config.alpha >= 1.0:
+        mean = (log_weights.exp() * atoms).sum(dim=-1)
+        x_star = atoms.new_full((batch,), config.x_max)
+        return mean, x_star
 
-    x = atoms.new_full((batch, 1), config.init_x)
-    x = x.clamp(config.x_min, config.x_max)
+    log_alpha = math.log(config.alpha)
 
-    for _ in range(config.newton_steps):
-        log_mgf = _log_mgf(atoms, log_weights, x)  # (batch,)
-        # tilted measure Q_x, used for both the first- and second-order terms.
+    def _g_prime(x: torch.Tensor) -> torch.Tensor:
+        """G'(x) = (log E[exp(Z/x)] - log alpha) - E_Qx[Z] / x, with x of shape (batch, 1)."""
         tilt_logits = log_weights + atoms / x
-        tilt = torch.softmax(tilt_logits, dim=-1)  # probabilities under Q_x
-        mean_qx = (tilt * atoms).sum(dim=-1)
-        var_qx = (tilt * atoms.pow(2)).sum(dim=-1) - mean_qx.pow(2)
-        var_qx = var_qx.clamp_min(1e-8)
+        log_mgf = torch.logsumexp(tilt_logits, dim=-1)
+        mean_qx = (torch.softmax(tilt_logits, dim=-1) * atoms).sum(dim=-1)
+        return (log_mgf - log_alpha) - mean_qx / x.squeeze(-1)
 
-        g_prime = (log_mgf - log_alpha) - mean_qx / x.squeeze(-1)
-        g_double_prime = var_qx / x.squeeze(-1).pow(3)
-        g_double_prime = g_double_prime.clamp_min(1e-8)
+    # Bisection on G', not Newton on G. G is strongly convex, so G' is monotonically
+    # increasing and a sign change brackets the minimiser -- bisection therefore
+    # converges unconditionally. Projected Newton does not: when the tilted measure
+    # Q_x collapses onto one atom, Var_Qx -> 0 and the curvature G'' = Var_Qx / x^3
+    # underflows, so the step G'/G'' explodes and is projected straight onto a bound,
+    # from which it bounces to the other bound and cycles forever. The returned x*
+    # was then just whichever bound the step-count parity landed on -- constant
+    # across genuinely different return distributions, and biased upward by 25-590%.
+    # Bisecting in log x also makes the iteration scale-free, so a run whose returns
+    # grow by an order of magnitude during training keeps the same precision.
+    with torch.no_grad():
+        lo = atoms.new_full((batch,), math.log(config.x_min))
+        hi = atoms.new_full((batch,), math.log(config.x_max))
+        for _ in range(config.solver_steps):
+            mid = 0.5 * (lo + hi)
+            below = _g_prime(mid.exp().unsqueeze(-1)) < 0
+            lo = torch.where(below, mid, lo)
+            hi = torch.where(below, hi, mid)
+        x_star = (0.5 * (lo + hi)).exp()
 
-        step = g_prime / g_double_prime
-        x = (x.squeeze(-1) - step).clamp(config.x_min, config.x_max).unsqueeze(-1)
-
-    log_mgf_final = _log_mgf(atoms, log_weights, x)
-    x_star = x.squeeze(-1)
+    # x* is detached deliberately. By the envelope theorem dG/dtheta = partial G /
+    # partial theta at the optimum, because partial G / partial x vanishes there, so
+    # gradients into the critic are exact without unrolling the solver through
+    # autograd -- and unlike an unrolled loop they cannot be corrupted by the
+    # iteration's own conditioning.
+    x_star = x_star.detach()
+    log_mgf_final = _log_mgf(atoms, log_weights, x_star.unsqueeze(-1))
     evar = x_star * (log_mgf_final - log_alpha)
     return evar, x_star
 
