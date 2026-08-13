@@ -18,6 +18,8 @@
 #   MEMORY      --memory value      (default: 64g)
 #   GPUS        --gpus value        (default: all; e.g. '"device=0"')
 #   WANDB_API_KEY   bridged into SSH sessions by the container entrypoint
+#   EVAR_AUTORUN=1  start the experiment queue daemon with the container,
+#                   turning pushes to experiments/queue.toml into runs (AUTOMATION.md)
 #   FORCE=1     replace an existing container with the same name
 set -euo pipefail
 
@@ -126,6 +128,8 @@ run_args+=(
     --restart unless-stopped
 )
 [ -n "${WANDB_API_KEY:-}" ] && run_args+=(-e "WANDB_API_KEY=$WANDB_API_KEY")
+# EVAR_AUTORUN=1 starts the queue daemon with the container (see AUTOMATION.md).
+run_args+=(-e "EVAR_AUTORUN=${EVAR_AUTORUN:-0}")
 
 "${DOCKER[@]}" run "${run_args[@]}" "$IMAGE" >/dev/null
 
