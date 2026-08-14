@@ -28,13 +28,17 @@ from evar_deeprl.distributional.iqn import IQNCritic
 from evar_deeprl.logging_utils import add_wandb_args, wandb_config_from_args
 from evar_deeprl.policies.gaussian import GaussianPolicy
 from evar_deeprl.risk.evar import EVaRConfig
-from evar_deeprl.utils import new_run_tag, resolve_device, save_records, state_to_tensor
+from evar_deeprl.utils import (discounted_support, new_run_tag, resolve_device,
+                               save_records, state_to_tensor)
 
-# (v_min, v_max, max_steps_per_episode) per supported env, sized to the env's reward
-# scale so the C51 support / EVaR search interval stay meaningful.
+# Per-step reward bounds and horizon. The C51 support is derived from these with
+# the discount applied, because the critic represents the *discounted* return: at
+# gamma = 0.99 InvertedPendulum tops out near 100, not the 1000 of its undiscounted
+# episode return. The old v_max of 1000 left ~5 of 51 atoms carrying any mass, and
+# EVaR is a tail statistic read off exactly that histogram.
 ENV_PRESETS = {
-    "InvertedPendulum-v4": dict(v_min=-5.0, v_max=1000.0, max_steps=1000),
-    "Pendulum-v1": dict(v_min=-1700.0, v_max=0.0, max_steps=200),
+    "InvertedPendulum-v4": dict(r_min=0.0, r_max=1.0, max_steps=1000),
+    "Pendulum-v1": dict(r_min=-16.27, r_max=0.0, max_steps=200),
 }
 
 
@@ -73,10 +77,12 @@ def main() -> None:
     action_dim = env.action_space.shape[0]
     action_bound = float(env.action_space.high[0])
 
-    critic = build_critic(args.critic, state_dim, v_min=preset["v_min"], v_max=preset["v_max"])
+    v_min, v_max = discounted_support(
+        preset["r_min"], preset["r_max"], preset["max_steps"], args.gamma)
+    critic = build_critic(args.critic, state_dim, v_min=v_min, v_max=v_max)
     actor = GaussianPolicy(state_dim, action_dim, action_bound=action_bound)
 
-    x_max = max(abs(preset["v_min"]), abs(preset["v_max"])) + 1.0
+    x_max = max(abs(v_min), abs(v_max)) + 1.0
 
     # Each run gets its own timestamped subdirectory so successive runs never
     # overwrite each other's CSVs/checkpoints.

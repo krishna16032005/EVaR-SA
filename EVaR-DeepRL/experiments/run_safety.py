@@ -88,17 +88,28 @@ from evar_deeprl.utils import new_run_tag, resolve_device, save_records, state_t
 # from the critic, which is why this is computed rather than guessed -- the first
 # smoke test returned -510 against a hand-picked v_min of -80.
 ENV_PRESETS = {
-    "SafetyPointGoal1-v0": dict(reward_max=40.0, cost_rate_max=0.70, max_steps=1000),
+    "SafetyPointGoal1-v0": dict(reward_max=30.0, cost_rate_max=0.70, max_steps=1000),
     "SafetyPointGoal2-v0": dict(reward_max=40.0, cost_rate_max=0.90, max_steps=1000),
     "SafetyCarGoal1-v0": dict(reward_max=40.0, cost_rate_max=0.70, max_steps=1000),
     "SafetyPointButton1-v0": dict(reward_max=40.0, cost_rate_max=0.80, max_steps=1000),
 }
 
 
-def support_bounds(preset: dict, cost_penalty: float) -> tuple[float, float]:
-    """C51 support wide enough for the worst priced return lambda can produce."""
+def support_bounds(preset: dict, cost_penalty: float, gamma: float) -> tuple[float, float]:
+    """C51 support for the worst *discounted* priced return lambda can produce.
+
+    The discount matters more than it looks: at gamma = 0.99 a 1000-step episode
+    has an effective horizon near 100, so sizing this from the undiscounted step
+    count (as this function first did) overstates the range by ~10x and wastes
+    most of the atoms -- the same units error that left run_cartpole.py with 9 of
+    51 atoms in use.
+    """
+    scale = float(preset["max_steps"]) if gamma >= 1.0 else (
+        (1.0 - gamma ** preset["max_steps"]) / (1.0 - gamma))
     v_max = preset["reward_max"]
-    v_min = -(cost_penalty * preset["cost_rate_max"] * preset["max_steps"]) - 5.0
+    # cost_rate_max is per step; 1.0 rather than the measured 0.70 because cost can
+    # concentrate early, where the discount weighs it most.
+    v_min = -(cost_penalty * 1.0 * scale) - 0.05 * scale
     return v_min, v_max
 
 
@@ -205,7 +216,7 @@ def main() -> None:
     action_dim = env.action_space.shape[0]
     action_bound = float(env.action_space.high[0])
 
-    v_min, v_max = support_bounds(preset, args.cost_penalty)
+    v_min, v_max = support_bounds(preset, args.cost_penalty, args.gamma)
     critic = build_critic(args.critic, state_dim, v_min=v_min, v_max=v_max, n_atoms=args.n_atoms)
     actor = GaussianPolicy(state_dim, action_dim, action_bound=action_bound)
     print(f"[setup] lambda={args.cost_penalty}  C51 support=[{v_min:.1f}, {v_max:.1f}] "

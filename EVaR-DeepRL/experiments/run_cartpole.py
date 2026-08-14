@@ -24,9 +24,13 @@ from evar_deeprl.distributional.iqn import IQNCritic
 from evar_deeprl.logging_utils import add_wandb_args, wandb_config_from_args
 from evar_deeprl.policies.categorical import CategoricalPolicy
 from evar_deeprl.risk.evar import EVaRConfig
-from evar_deeprl.utils import new_run_tag, resolve_device, save_records, state_to_tensor
+from evar_deeprl.utils import (discounted_support, new_run_tag, resolve_device,
+                               save_records, state_to_tensor)
 
 ENV_ID = "CartPole-v1"
+
+
+MAX_STEPS_PER_EPISODE = 500  # CartPole-v1 time limit
 
 
 def build_critic(kind: str, state_dim: int, v_min: float, v_max: float):
@@ -44,6 +48,11 @@ def main() -> None:
     parser.add_argument("--alpha", type=float, default=0.1, help="EVaR confidence level")
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--n-steps", type=int, default=16)
+    parser.add_argument("--entropy-coef", type=float, default=0.01,
+                        help="entropy bonus. The old 1e-3 let policy entropy fall from "
+                             "0.69 (the maximum for 2 actions) to ~0.09 by a quarter of "
+                             "training, leaving a near-deterministic policy that could "
+                             "not recover -- seeds peaked at 500 and ended at 80")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--results-dir", type=str, default=os.path.join("results", "cartpole"))
     parser.add_argument("--histogram-every", type=int, default=50, help="episodes between critic return-distribution snapshots; 0 disables")
@@ -62,9 +71,14 @@ def main() -> None:
     state_dim = env.observation_space.shape[0]
     n_actions = env.action_space.n
 
-    # CartPole-v1 gives +1 reward per step for up to 500 steps, so returns lie in
-    # [0, 500]. A small negative pad keeps the C51 support away from the boundary.
-    critic = build_critic(args.critic, state_dim, v_min=-5.0, v_max=500.0)
+    # CartPole-v1 gives +1 per step for up to 500 steps, so *undiscounted* returns
+    # lie in [0, 500] -- but the critic represents the *discounted* return, which
+    # at gamma = 0.99 tops out near 99.3. The old v_max of 500 was in the wrong
+    # units and left ~9 of 51 atoms carrying any mass, measured over 10k episodes;
+    # EVaR is a tail statistic read straight off that histogram, so the resolution
+    # it is computed at is not a cosmetic concern.
+    v_min, v_max = discounted_support(0.0, 1.0, MAX_STEPS_PER_EPISODE, args.gamma)
+    critic = build_critic(args.critic, state_dim, v_min=v_min, v_max=v_max)
     actor = CategoricalPolicy(state_dim, n_actions)
 
     # Each run gets its own timestamped subdirectory so successive runs never
@@ -77,8 +91,9 @@ def main() -> None:
         critic_kind=args.critic,
         gamma=args.gamma,
         n_steps=args.n_steps,
+        entropy_coef=args.entropy_coef,
         max_episodes=args.episodes,
-        max_steps_per_episode=500,
+        max_steps_per_episode=MAX_STEPS_PER_EPISODE,
         evar=EVaRConfig(alpha=args.alpha, x_min=1e-2, x_max=200.0),
         seed=args.seed,
         wandb=wandb_config_from_args(args),

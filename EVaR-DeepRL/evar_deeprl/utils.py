@@ -66,3 +66,27 @@ def save_records(directory: str, prefix: str, logs: dict) -> None:
         path = os.path.join(directory, f"{prefix}_{suffix}.csv")
         _write_records(path, records)
         print(f"Saved {len(records)} rows to {path}")
+
+
+def discounted_support(reward_min: float, reward_max: float, horizon: int,
+                       gamma: float, margin: float = 0.05) -> tuple[float, float]:
+    """C51 support bounds for the quantity the critic actually represents.
+
+    The critic learns the *discounted* return ``E[sum_t gamma^t r_t]``, which for a
+    bounded per-step reward can never exceed ``r_max * (1 - gamma^T) / (1 - gamma)``
+    -- 99.3 for CartPole at gamma = 0.99, not the 500 of its undiscounted episode
+    return. Sizing the support in undiscounted units is not merely untidy: it was
+    leaving ~9 of 51 atoms carrying any mass (~5 of 51 on InvertedPendulum),
+    measured over 10k episodes, and EVaR is a tail statistic read off exactly that
+    histogram. A tail estimate from a 9-atom grid is dominated by discretisation.
+
+    ``margin`` widens the range slightly so the extreme atoms are not pinned by the
+    projection.
+    """
+    if gamma >= 1.0:
+        scale = float(horizon)
+    else:
+        scale = (1.0 - gamma ** horizon) / (1.0 - gamma)
+    lo, hi = reward_min * scale, reward_max * scale
+    pad = margin * max(abs(lo), abs(hi), 1.0)
+    return lo - pad, hi + pad
