@@ -163,13 +163,18 @@ class LotteryGridWorld:
 
 
 # --------------------------------------------------------------- exact math --
-def return_distribution(env: LotteryGridWorld, policy) -> tuple[np.ndarray, np.ndarray]:
-    """Exact distribution of the trajectory return under ``policy``.
+def return_distribution(env: LotteryGridWorld, policy, start=(0, 0)
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """Exact distribution of the return-to-go from ``start`` under ``policy``.
 
     ``policy(row, col) -> (p_safe, p_risky)``. Enumerates every action sequence and
     every lottery outcome, so this is the true ``J_EVaR`` integrand -- no sampling,
     no critic. That is the whole point of this environment: C1 and C3 can be checked
     against a number that is *known*, not estimated.
+
+    With the default ``start`` this is the trajectory return. From an interior state
+    it is what the critic is supposed to represent, which is what makes the per-state
+    versus per-trajectory comparison (C3) computable here.
     """
     acc: dict[float, float] = {}
 
@@ -187,10 +192,49 @@ def return_distribution(env: LotteryGridWorld, policy) -> tuple[np.ndarray, np.n
             walk(1, col + 1, total + seg.hi, prob * p_risky * seg.p)
             walk(1, col + 1, total + seg.lo, prob * p_risky * (1.0 - seg.p))
 
-    walk(0, 0, 0.0, 1.0)
+    walk(start[0], start[1], 0.0, 1.0)
     values = np.array(sorted(acc), dtype=np.float64)
     probs = np.array([acc[v] for v in values], dtype=np.float64)
     return values, probs / probs.sum()
+
+
+def render(env: LotteryGridWorld, policy=None, x_star=None, agent=None) -> str:
+    """ASCII view of the grid, optionally overlaid with a policy and beta*(s).
+
+    Cheap to call from a training loop or a REPL, and it is what makes the
+    environment inspectable without opening a figure::
+
+        col          0            1            2
+        SAFE   >  [ 10.0 ]  >  [ 10.0 ]  >  [ 10.0 ]  > GOAL
+        RISKY  >  [14.0/4.0]  ...
+    """
+    lines = []
+    head = "  col" + "".join(f"{c:^16d}" for c in range(env.n_segments))
+    lines.append(head)
+    safe_cells, risky_cells = [], []
+    for c, seg in enumerate(env.segments):
+        pick = ""
+        if policy is not None:
+            ps, pr = policy(0, c)
+            pick = " *" if ps >= pr else "  "
+        safe_cells.append(f"[{seg.safe:5.1f}]{pick}".center(16))
+        pickr = ""
+        if policy is not None:
+            ps, pr = policy(1, c) if c > 0 else policy(0, c)
+            pickr = " *" if pr > ps else "  "
+        risky_cells.append(f"[{seg.hi:.0f}/{seg.lo:.0f} p{seg.p:.2f}]{pickr}".center(16))
+    lines.append("  SAFE " + "".join(safe_cells) + " GOAL")
+    lines.append("  RISK " + "".join(risky_cells))
+    if x_star is not None:
+        cells = []
+        for c in range(env.n_segments):
+            v = x_star.get((0, c), float("nan"))
+            cells.append(f"x*={v:6.2f}".center(16))
+        lines.append("  x*(s)" + "".join(cells))
+    if agent is not None:
+        lines.append(f"  agent at row={agent[0]} col={agent[1]}")
+    lines.append("  ('*' marks the greedy action; RISK pays hi w.p. p, else lo)")
+    return "\n".join(lines)
 
 
 def evar_exact(values: np.ndarray, probs: np.ndarray, alpha: float,
