@@ -60,7 +60,7 @@ def polyak_update(target: nn.Module, source: nn.Module, tau: float) -> None:
 
 @dataclass
 class TrainConfig:
-    critic_kind: Literal["c51", "iqn"] = "c51"
+    critic_kind: Literal["c51", "iqn", "c51q"] = "c51"
     gamma: float = 0.99
     n_steps: int = 16
     max_episodes: int = 500
@@ -100,6 +100,7 @@ class TrainConfig:
 @dataclass
 class RolloutBuffer:
     states: list = field(default_factory=list)
+    actions: list = field(default_factory=list)   # needed by the action-value critic
     log_probs: list = field(default_factory=list)
     entropies: list = field(default_factory=list)
     rewards: list = field(default_factory=list)
@@ -108,6 +109,7 @@ class RolloutBuffer:
 
     def clear(self) -> None:
         self.states.clear()
+        self.actions.clear()
         self.log_probs.clear()
         self.entropies.clear()
         self.rewards.clear()
@@ -139,7 +141,12 @@ def _critic_loss(
     next_states: torch.Tensor,
     dones: torch.Tensor,
     cfg: TrainConfig,
+    actions: torch.Tensor | None = None,
+    next_action_probs: torch.Tensor | None = None,
 ) -> torch.Tensor:
+    if cfg.critic_kind == "c51q":
+        return critic.loss(states, actions, rewards, next_states, dones, cfg.gamma,
+                           next_action_probs, target_net=target_critic)
     return critic.loss(states, rewards, next_states, dones, cfg.gamma, target_net=target_critic)
 
 
@@ -367,7 +374,14 @@ def train(
         log_probs = torch.stack(buffer.log_probs).to(device)
         entropies = torch.stack(buffer.entropies).to(device)
 
-        critic_loss = _critic_loss(critic, target_critic, states, rewards, next_states, dones, cfg)
+        actions = (torch.stack(buffer.actions).to(device)
+                   if cfg.critic_kind == "c51q" else None)
+        next_action_probs = None
+        if cfg.critic_kind == "c51q":
+            with torch.no_grad():
+                next_action_probs = actor.distribution(next_states).probs
+        critic_loss = _critic_loss(critic, target_critic, states, rewards, next_states,
+                                   dones, cfg, actions, next_action_probs)
         critic_opt.zero_grad()
         critic_loss.backward()
         critic_grad_norm = nn.utils.clip_grad_norm_(critic.parameters(), cfg.grad_clip)
@@ -379,12 +393,28 @@ def train(
             # instead of two of each: the EVaR solve is the costliest part of the
             # update, and s / s' need identical treatment anyway.
             batch = states.shape[0]
-            both = torch.cat([states, next_states], dim=0)
-            evar_both, x_star_both = _critic_evar(critic, both, cfg)
-            evar_s, evar_s_next = evar_both[:batch], evar_both[batch:]
-            x_star_s = x_star_both[:batch]
-            value_s = _critic_mean_value(critic, states, cfg)
-            raw_advantage = rewards + cfg.gamma * (1.0 - dones) * evar_s_next - evar_s
+            if cfg.critic_kind == "c51q":
+                # Action-value form. The tilt is applied to Z(s,a), which carries the
+                # immediate reward's randomness, so alpha reaches the reward itself --
+                # the state-value form cannot, because EVaR is translation-equivariant
+                # and the sampled reward is a scalar. The baseline is the actor-weighted
+                # mixture, i.e. the state's value under its own policy, which keeps the
+                # advantage centred without changing the argmax.
+                pi = actor.distribution(states).probs
+                evar_a, x_a = critic.evar_all_actions(states, cfg.evar)     # (B, A)
+                evar_s = (evar_a * pi).sum(-1)
+                taken = evar_a.gather(1, actions.long().view(-1, 1)).squeeze(1)
+                raw_advantage = taken - evar_s
+                evar_s_next = evar_s                     # logged only; no bootstrap here
+                x_star_s = (x_a * pi).sum(-1)
+                value_s = critic.mean_value(states, action_probs=pi)
+            else:
+                both = torch.cat([states, next_states], dim=0)
+                evar_both, x_star_both = _critic_evar(critic, both, cfg)
+                evar_s, evar_s_next = evar_both[:batch], evar_both[batch:]
+                x_star_s = x_star_both[:batch]
+                value_s = _critic_mean_value(critic, states, cfg)
+                raw_advantage = rewards + cfg.gamma * (1.0 - dones) * evar_s_next - evar_s
             # Switchable because it is a suspect, not a detail. In expectation this
             # advantage is risk-neutral in the immediate reward -- the tilt only
             # reaches EVaR(Z(s')) -- yet trained agents still take lotteries, so the
@@ -469,6 +499,7 @@ def train(
                 next_obs, reward, terminated, truncated, _ = env.step(env_action)
 
                 buffer.states.append(state_t)
+                buffer.actions.append(action_t.squeeze(0).detach())
                 buffer.log_probs.append(log_prob.squeeze(0))
                 buffer.entropies.append(entropy.squeeze(0))
                 buffer.rewards.append(float(reward))

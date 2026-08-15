@@ -63,7 +63,12 @@ def per_state_values(env, table, alpha):
 
 
 def greedy_improve(env, table, alpha):
-    """One sweep of policy improvement under the per-state EVaR advantage."""
+    """One sweep under the per-state EVaR advantage, as the code computes it.
+
+    ``r + EVaR(Z(s')) - EVaR(Z(s))``. In expectation the immediate reward enters
+    through its conditional mean, so this compares ``safe`` against the lottery's
+    *mean* -- which is where the risk sensitivity is lost.
+    """
     V, _ = per_state_values(env, table, alpha)
     new = {}
     for col in range(env.n_segments):
@@ -75,11 +80,50 @@ def greedy_improve(env, table, alpha):
     return new
 
 
-def fixed_point(env, alpha, start_table, max_sweeps=50):
+def action_value_dist(env, table, row, col, action):
+    """Distribution of taking ``action`` at (row, col) then following ``table``.
+
+    This is the object the fix needs: the immediate reward's *randomness* convolved
+    with the return-to-go, rather than a sampled scalar added to it. EVaR is
+    translation-equivariant, so adding a sampled reward to EVaR(Z(s')) gives back
+    the current advantage exactly -- the tilt only reaches the reward when the
+    critic represents its distribution.
+    """
+    pol = table_policy(table)
+    tail_v, tail_p = return_distribution(env, pol, start=(action, col + 1))
+    seg = env.segments[col]
+    if action == 0:
+        rv, rp = np.array([seg.safe]), np.array([1.0])
+    else:
+        rv, rp = np.array([seg.hi, seg.lo]), np.array([seg.p, 1.0 - seg.p])
+    vals = (rv[:, None] + tail_v[None, :]).ravel()
+    prs = (rp[:, None] * tail_p[None, :]).ravel()
+    order = np.argsort(vals)
+    return vals[order], prs[order]
+
+
+def greedy_improve_action_value(env, table, alpha):
+    """One sweep under the proposed action-value advantage.
+
+    ``EVaR_alpha( r(s,a) + Z(s') )`` rather than ``r + EVaR_alpha( Z(s') )``.
+    """
+    new = {}
+    for col in range(env.n_segments):
+        for row in (0, 1):
+            qs = []
+            for a in (0, 1):
+                v, p = action_value_dist(env, table, row, col, a)
+                qs.append(evar_exact(v, p, alpha)[0])
+            new[(row, col)] = 0 if qs[0] >= qs[1] else 1
+    return new
+
+
+def fixed_point(env, alpha, start_table, max_sweeps=50, improver=None):
+    improver = improver or greedy_improve
     table = dict(start_table)
     seen = [tuple(sorted(table.items()))]
     for _ in range(max_sweeps):
-        nxt = greedy_improve(env, table, alpha)
+        nxt = improver(env, table, alpha)
         key = tuple(sorted(nxt.items()))
         if key == seen[-1]:
             return nxt, True          # converged
@@ -90,8 +134,17 @@ def fixed_point(env, alpha, start_table, max_sweeps=50):
     return table, False
 
 
+IMPROVER = greedy_improve
+
+
 def main() -> None:
+    global IMPROVER
     env = LotteryGridWorld(DEFAULT_SEGMENTS)
+    if "--action-value" in sys.argv:
+        IMPROVER = greedy_improve_action_value
+        print("PROPOSED operator:  EVaR( r(s,a) + Z(s') )  -- tilt reaches the reward")
+    else:
+        print("CURRENT operator:   r + EVaR( Z(s') )       -- tilt misses the reward")
     print("Per-state EVaR operator vs the trajectory-EVaR optimum")
     print("Perfect critic, greedy actor, no learning. Regret is exact.")
     print("=" * 94)
@@ -109,7 +162,7 @@ def main() -> None:
         results = []
         for init in (0, 1):
             start = {(r, c): init for c in range(env.n_segments) for r in (0, 1)}
-            fp, converged = fixed_point(env, alpha, start)
+            fp, converged = fixed_point(env, alpha, start, improver=IMPROVER)
             v, p = return_distribution(env, table_policy(fp))
             ev_fp, _ = evar_exact(v, p, alpha)
             results.append((lane_sequence(env, fp), ev_fp, converged))
