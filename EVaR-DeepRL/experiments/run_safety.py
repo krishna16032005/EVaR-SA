@@ -65,6 +65,7 @@ import torch
 
 from evar_deeprl.agents.base import TrainConfig, train
 from evar_deeprl.distributional.c51 import C51Critic
+from evar_deeprl.distributional.c51qc import C51QContinuousCritic
 from evar_deeprl.distributional.iqn import IQNCritic
 from evar_deeprl.logging_utils import add_wandb_args, wandb_config_from_args
 from evar_deeprl.policies.gaussian import GaussianPolicy
@@ -152,7 +153,11 @@ class CostPricedEnv:
         self.env.close()
 
 
-def build_critic(kind: str, state_dim: int, v_min: float, v_max: float, n_atoms: int):
+def build_critic(kind: str, state_dim: int, v_min: float, v_max: float, n_atoms: int,
+                 action_dim: int = 0):
+    if kind == "c51qc":
+        return C51QContinuousCritic(state_dim, action_dim, n_atoms=n_atoms,
+                                    v_min=v_min, v_max=v_max)
     if kind == "c51":
         return C51Critic(state_dim, n_atoms=n_atoms, v_min=v_min, v_max=v_max)
     if kind == "iqn":
@@ -163,7 +168,11 @@ def build_critic(kind: str, state_dim: int, v_min: float, v_max: float, n_atoms:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env", type=str, default="SafetyPointGoal1-v0", choices=list(ENV_PRESETS))
-    parser.add_argument("--critic", choices=["c51", "iqn"], default="c51")
+    parser.add_argument("--critic", choices=["c51", "iqn", "c51qc"], default="c51",
+                        help="c51qc is the continuous action-value critic: it tilts "
+                             "Z(s,a) so alpha reaches the immediate reward. The c51 "
+                             "state-value form cannot, and is exactly risk-neutral "
+                             "at a terminal step -- see analysis/c3_attribution.py")
     parser.add_argument("--episodes", type=int, default=500)
     parser.add_argument("--alpha", type=float, default=0.1, help="EVaR confidence level")
     parser.add_argument("--cost-penalty", type=float, default=0.25,
@@ -217,7 +226,8 @@ def main() -> None:
     action_bound = float(env.action_space.high[0])
 
     v_min, v_max = support_bounds(preset, args.cost_penalty, args.gamma)
-    critic = build_critic(args.critic, state_dim, v_min=v_min, v_max=v_max, n_atoms=args.n_atoms)
+    critic = build_critic(args.critic, state_dim, v_min=v_min, v_max=v_max,
+                          n_atoms=args.n_atoms, action_dim=action_dim)
     actor = GaussianPolicy(state_dim, action_dim, action_bound=action_bound)
     print(f"[setup] lambda={args.cost_penalty}  C51 support=[{v_min:.1f}, {v_max:.1f}] "
           f"over {args.n_atoms} atoms  (alpha must exceed 1/n_atoms = "

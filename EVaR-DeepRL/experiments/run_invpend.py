@@ -24,6 +24,7 @@ import torch
 
 from evar_deeprl.agents.base import TrainConfig, train
 from evar_deeprl.distributional.c51 import C51Critic
+from evar_deeprl.distributional.c51qc import C51QContinuousCritic
 from evar_deeprl.distributional.iqn import IQNCritic
 from evar_deeprl.logging_utils import add_wandb_args, wandb_config_from_args
 from evar_deeprl.policies.gaussian import GaussianPolicy
@@ -42,7 +43,11 @@ ENV_PRESETS = {
 }
 
 
-def build_critic(kind: str, state_dim: int, v_min: float, v_max: float):
+def build_critic(kind: str, state_dim: int, v_min: float, v_max: float,
+                 action_dim: int = 0):
+    if kind == "c51qc":
+        return C51QContinuousCritic(state_dim, action_dim, n_atoms=51,
+                                    v_min=v_min, v_max=v_max)
     if kind == "c51":
         return C51Critic(state_dim, n_atoms=51, v_min=v_min, v_max=v_max)
     if kind == "iqn":
@@ -53,7 +58,11 @@ def build_critic(kind: str, state_dim: int, v_min: float, v_max: float):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env", type=str, default="InvertedPendulum-v4", choices=list(ENV_PRESETS))
-    parser.add_argument("--critic", choices=["c51", "iqn"], default="c51")
+    parser.add_argument("--critic", choices=["c51", "iqn", "c51qc"], default="c51",
+                        help="c51qc is the continuous action-value critic: it tilts "
+                             "Z(s,a) so alpha reaches the immediate reward. The c51 "
+                             "state-value form cannot, and is exactly risk-neutral "
+                             "at a terminal step -- see analysis/c3_attribution.py")
     parser.add_argument("--episodes", type=int, default=500)
     parser.add_argument("--alpha", type=float, default=0.1, help="EVaR confidence level")
     parser.add_argument("--gamma", type=float, default=0.99)
@@ -79,7 +88,8 @@ def main() -> None:
 
     v_min, v_max = discounted_support(
         preset["r_min"], preset["r_max"], preset["max_steps"], args.gamma)
-    critic = build_critic(args.critic, state_dim, v_min=v_min, v_max=v_max)
+    critic = build_critic(args.critic, state_dim, v_min=v_min, v_max=v_max,
+                          action_dim=action_dim)
     actor = GaussianPolicy(state_dim, action_dim, action_bound=action_bound)
 
     x_max = max(abs(v_min), abs(v_max)) + 1.0

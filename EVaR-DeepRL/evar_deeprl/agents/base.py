@@ -60,7 +60,7 @@ def polyak_update(target: nn.Module, source: nn.Module, tau: float) -> None:
 
 @dataclass
 class TrainConfig:
-    critic_kind: Literal["c51", "iqn", "c51q"] = "c51"
+    critic_kind: Literal["c51", "iqn", "c51q", "c51qc"] = "c51"
     gamma: float = 0.99
     n_steps: int = 16
     max_episodes: int = 500
@@ -75,6 +75,8 @@ class TrainConfig:
     # switchable: see the note at its use site -- it is a candidate source of
     # risk-seeking behaviour independent of the EVaR operator.
     normalize_advantage: bool = True
+    # Policy-action samples used for the continuous action-value baseline.
+    baseline_samples: int = 4
     evar: EVaRConfig = field(default_factory=EVaRConfig)
     log_every: int = 10
     seed: int = 0
@@ -144,7 +146,7 @@ def _critic_loss(
     actions: torch.Tensor | None = None,
     next_action_probs: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    if cfg.critic_kind == "c51q":
+    if cfg.critic_kind in ("c51q", "c51qc"):
         return critic.loss(states, actions, rewards, next_states, dones, cfg.gamma,
                            next_action_probs, target_net=target_critic)
     return critic.loss(states, rewards, next_states, dones, cfg.gamma, target_net=target_critic)
@@ -375,11 +377,16 @@ def train(
         entropies = torch.stack(buffer.entropies).to(device)
 
         actions = (torch.stack(buffer.actions).to(device)
-                   if cfg.critic_kind == "c51q" else None)
+                   if cfg.critic_kind in ("c51q", "c51qc") else None)
         next_action_probs = None
         if cfg.critic_kind == "c51q":
             with torch.no_grad():
                 next_action_probs = actor.distribution(next_states).probs
+        elif cfg.critic_kind == "c51qc":
+            # Continuous: the bootstrap needs a sampled next action, not a
+            # distribution over them.
+            with torch.no_grad():
+                next_action_probs, _ = actor.act(next_states)
         critic_loss = _critic_loss(critic, target_critic, states, rewards, next_states,
                                    dones, cfg, actions, next_action_probs)
         critic_opt.zero_grad()
@@ -393,7 +400,17 @@ def train(
             # instead of two of each: the EVaR solve is the costliest part of the
             # update, and s / s' need identical treatment anyway.
             batch = states.shape[0]
-            if cfg.critic_kind == "c51q":
+            if cfg.critic_kind == "c51qc":
+                # Same action-value advantage as the discrete case; the baseline is a
+                # Monte-Carlo average over policy actions because the sum is unavailable.
+                taken, x_taken = critic.evar(states, cfg.evar, actions)
+                evar_s = critic.baseline_evar(states, actor, cfg.evar,
+                                              samples=cfg.baseline_samples)
+                raw_advantage = taken - evar_s
+                evar_s_next = evar_s
+                x_star_s = x_taken
+                value_s = critic.mean_value(states, actions)
+            elif cfg.critic_kind == "c51q":
                 # Action-value form. The tilt is applied to Z(s,a), which carries the
                 # immediate reward's randomness, so alpha reaches the reward itself --
                 # the state-value form cannot, because EVaR is translation-equivariant
