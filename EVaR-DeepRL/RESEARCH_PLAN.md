@@ -19,11 +19,39 @@ Three claims have to be defended:
 | C2. It is cheaper | EVaR vs env-steps against SPSA at a matched sample budget |
 | C3. The approximation is sound | per-state tilting vs the paper's trajectory-level tilting (Eq. 5) -- quantified where the exact optimum is computable |
 
-C3 is the one a reviewer will press. The README already concedes the deep method
-tilts per-state through the critic rather than per-trajectory. Answer it on
-**gridworld**, where trajectory EVaR is exactly computable: compare EVaR-AC, SPSA,
-and the analytic optimum. A small measured gap is a defensible approximation; an
-unmeasured one is a hole.
+**C3 is answered, and it was not an approximation gap.** It was a formulation
+error, which is a far better position to write from.
+
+Measured on the lottery gridworld (`evar_deeprl/envs/lottery_gridworld.py`), where
+trajectory EVaR is exactly computable, with a *perfect* critic and greedy policy
+improvement -- no learning, so the number is exact:
+
+| advantage | alphas correct | worst regret |
+|---|---|---|
+| `r + EVaR(Z(s'))` -- what the code did | 1 of 7 | **86.35%** |
+| `EVaR(r(s,a) + Z(s'))` -- action-value | **7 of 7** | **0.00%** |
+
+The state-value form applies the risk tilt only to the *future* return, so the
+immediate reward enters through its conditional mean. At a terminal step `Z(s')` is
+degenerate, alpha cannot enter at all, and the comparison is safe-reward against
+lottery-*mean*; that makes the previous step deterministic and the collapse
+propagates back to the start. The fixed point is the risk-neutral policy at every
+alpha.
+
+Moving the reward inside the tilt is not sufficient on its own: EVaR is
+translation-equivariant, so `EVaR(r + Z(s'))` with a *sampled scalar* `r` is
+identically `r + EVaR(Z(s'))`. The tilt reaches the reward only when the critic
+represents the reward's distribution -- hence `Z(s,a)`, implemented as
+`C51QCritic` (discrete actions; expected-SARSA bootstrap so the critic evaluates
+the current policy rather than an optimistic one).
+
+Caveat worth keeping attached: 0.00% is exact *on this environment*, where segments
+are independent and the objective decouples. It establishes that the state-value
+form is the source of the bias and that the action-value form removes it here, not
+that per-state tilting is exact in general.
+
+SPSA head-to-head at a matched sample budget is still to run, and this is the
+environment where it is actually runnable -- episodes are three steps.
 
 ## Measuring the objective, not a proxy
 
@@ -226,18 +254,32 @@ Done:
    control is now exact, and the sweep is worth keeping only as a measurement
    regression test.
 
+3. ~~Gridworld exactness study -> C1 and C3 together.~~ Built, with lotteries that
+   pay (all-risky gives up 6% of mean for 9x the best case) and a graded ground
+   truth of 3, 2, 2, 2, 2, 1, 0 lotteries across alpha. C3 answered above. C1: with
+   the action-value critic, exact regret falls from 4.4-6.4% to **0.1-0.3%** at
+   alpha 0.05-0.3, and -- the bigger result -- policy decisiveness goes from
+   0.10-0.29 to **0.49-0.50** of a maximum 0.5. The old agent was never really
+   choosing.
+
 Now, in order:
 
-3. **Vectorized envs.** Promoted to first because it is the likely fix for the
-   learner instability, and nothing downstream is measurable until seed variance
-   comes down. Pass condition: CartPole reaching ~500 across all seeds.
-4. **Gridworld exactness study -> C1 and C3 together.** Design it so the
-   risk-seeking and risk-neutral optima are *provably different policies* (a
-   low-probability/high-payoff route against a safe moderate one) -- otherwise it
-   repeats CartPole's failure. Trajectory EVaR is exactly computable there, so
-   this is the one experiment with analytic ground truth, and its small state
-   space makes it the most robust to a weak learner.
-5. **Safety-Gymnasium**: calibrate `lambda` first, then the alpha sweep.
-6. `--risk-objective` switch, then baselines 3 and 4.
-7. Phase 3 MuJoCo, with a stochastic variant, vs SPSA -> C2.
-8. Swimmer / HalfCheetah at scale.
+4. **The alpha = 0.5 failure mode.** 4 of 5 seeds reach 0.55% regret; one collapses
+   to all-safe at 50.93%, which is exactly the state-value operator's fixed point.
+   Cause is critic coverage: the unchosen action's value is never trained (measured
+   error +46.36 on a never-visited state-action), and once the policy commits at
+   p ~ 0.998 the advantage `Q(s,a) - sum_a pi Q` collapses toward zero, so nothing
+   corrects a wrong commitment. Raising the entropy bonus does not fix it
+   (0.4% -> 0.5% -> 1.4% at 0.05 / 0.2 / 0.5). Needs a coverage mechanism.
+5. **An action-value form for continuous actions.** `C51QCritic` is discrete-action
+   only, so `run_invpend.py` and `run_safety.py` still carry the state-value critic
+   and therefore the C3 defect. Everything queued for Safety-Gymnasium is currently
+   built on the broken form. This blocks the whole continuous-control ladder.
+6. **Vectorized envs**, for the on-policy correlation problem -- a stability fix,
+   not a speedup. Note the gridworld work reframes how much of the CartPole
+   instability was ever the optimizer: the binding constraint there may have been
+   the same 0.72-against-noise signal ratio.
+7. **Safety-Gymnasium**: calibrate `lambda` first, then the alpha sweep.
+8. **SPSA head-to-head** on gridworld at a matched sample budget -> C2.
+9. `--risk-objective` switch, then baselines 3 and 4.
+10. Phase 3 MuJoCo with a stochastic variant; Swimmer / HalfCheetah at scale.

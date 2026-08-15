@@ -57,7 +57,7 @@ def save(fig, out, stem):
 # ------------------------------------------------------------------ figure 1 --
 def _draw_route(ax, env, lanes, CW, CH, GAP, colour, dashed, halo, zorder):
     def route_y(c):
-        return (1 - lanes[c]) * (CH + GAP) + CH * (0.17 if not dashed else 0.34)
+        return (1 - lanes[c]) * (CH + GAP) + CH * (0.20 if not dashed else 0.045)
 
     pts = [(-GAP * 0.8, route_y(0))]
     for c in range(env.n_segments):
@@ -97,21 +97,11 @@ def _draw_grid(ax, env, lanes, title, subtitle, learned=None):
     # The route: enter left, hop between lanes, exit right. It runs through the
     # lower third of each cell rather than the middle so it does not strike through
     # the payoff text, and carries a surface-coloured halo where it crosses a border.
-    def route_y(c):
-        return (1 - lanes[c]) * (CH + GAP) + CH * 0.17
-
-    pts = [(-GAP * 0.8, route_y(0))]
-    for c in range(env.n_segments):
-        pts.append((c * (CW + GAP), route_y(c)))
-        pts.append((c * (CW + GAP) + CW, route_y(c)))
-    pts.append((env.n_segments * (CW + GAP) - GAP * 0.2, pts[-1][1]))
-    xs, ys = zip(*pts)
     halo = [pe.Stroke(linewidth=4.6, foreground=SURFACE), pe.Normal()]
-    ax.plot(xs, ys, color=INK, linewidth=2.0, zorder=5, solid_capstyle="round",
-            path_effects=halo)
-    ax.plot(xs[-1], ys[-1], marker=">", color=INK, markersize=8, zorder=6,
-            path_effects=halo)
-    ax.plot(xs[0], ys[0], marker="o", color=INK, markersize=6, zorder=6)
+    _draw_route(ax, env, lanes, CW, CH, GAP, INK, False, halo, 5)
+
+    if learned is not None and tuple(learned) != tuple(lanes):
+        _draw_route(ax, env, learned, CW, CH, GAP, BLUE, True, halo, 3)
 
     ax.set_xlim(-0.75, env.n_segments * (CW + GAP) + 0.1)
     ax.set_ylim(-0.45, 2 * CH + GAP + 0.42)
@@ -120,7 +110,23 @@ def _draw_grid(ax, env, lanes, title, subtitle, learned=None):
     ax.text(-0.7, -0.30, subtitle, fontsize=8.8, color=INK_SOFT, ha="left", va="top")
 
 
-def fig_paths(env, out):
+def learned_lanes_by_alpha(pattern):
+    """Modal learned route per alpha, from c1_summary.txt files."""
+    from collections import Counter
+    seqs = {}
+    for f in glob.glob(os.path.join(pattern, "*", "c1_summary.txt")):
+        rec = dict(l.split("\t") for l in open(f).read().strip().split("\n"))
+        a = float(rec["alpha"])
+        seqs.setdefault(a, []).append(rec["learned_lanes"])
+    out = {}
+    for a, v in seqs.items():
+        seq = Counter(v).most_common(1)[0][0]
+        out[a] = (tuple(0 if x == "SAFE" else 1 for x in seq.split("-")),
+                  Counter(v).most_common(1)[0][1], len(v))
+    return out
+
+
+def fig_paths(env, out, learned_by_alpha=None):
     """The routes themselves: which lanes each risk appetite actually walks."""
     # Group alphas by the policy they induce -- the policy only takes a few values,
     # so one panel per distinct route says more than one panel per alpha.
@@ -151,9 +157,23 @@ def fig_paths(env, out):
         ev, _ = evar_exact(v, p, alphas[0])
         mean, best = float((v * p).sum()), float(v.max())
         n_risky = sum(lanes)
+        learned = None
+        if learned_by_alpha:
+            hit = [learned_by_alpha[a] for a in alphas if a in learned_by_alpha]
+            if hit:
+                learned = hit[0][0]
         sub = (f"mean {mean:.1f}    best case {best:.0f}\n"
                f"{n_risky} of 3 lotteries taken")
-        _draw_grid(ax, env, lanes, f"{rng}", sub)
+        if learned is not None and tuple(learned) != tuple(lanes):
+            sub += "   (agent differs)"
+        _draw_grid(ax, env, lanes, f"{rng}", sub, learned=learned)
+    if learned_by_alpha:
+        from matplotlib.lines import Line2D
+        fig.legend(handles=[Line2D([], [], color=INK, lw=2, label="EVaR-optimal (exact)"),
+                            Line2D([], [], color=BLUE, lw=2, ls="--",
+                                   label="learned, action-value critic")],
+                   loc="upper right", frameon=False, fontsize=10,
+                   labelcolor=INK_SOFT, bbox_to_anchor=(0.995, 1.0))
     fig.suptitle("The route each risk appetite walks: safe lane on top, lottery below\n"
                  "as alpha falls the agent takes more lotteries, and the best case grows",
                  fontsize=12.5, color=INK, x=0.006, ha="left", y=0.99, va="top")
@@ -314,6 +334,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--trained-glob", default="/tmp/gws_*")
     ap.add_argument("--out", default="results/figures_gridworld")
+    ap.add_argument("--learned-glob", default=None,
+                    help="glob of run dirs whose learned route to overlay, e.g. '/tmp/q_*'")
     args = ap.parse_args()
 
     env = LotteryGridWorld(DEFAULT_SEGMENTS)
@@ -331,7 +353,8 @@ def main() -> None:
     print(render(env))
     print()
     trained = load_trained(args.trained_glob)
-    fig_paths(env, args.out)
+    fig_paths(env, args.out, learned_by_alpha=learned_lanes_by_alpha(args.learned_glob)
+              if args.learned_glob else None)
     fig_environment(env, args.out)
     fig_c1(env, trained, args.out)
     fig_c3_mechanism(env, args.out)

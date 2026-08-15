@@ -220,6 +220,30 @@ def main() -> None:
     print(f"  mean |p - 0.5| = {float(np.mean(conf)):.3f}   "
           f"(0.0 = undecided, 0.5 = fully committed)")
 
+    # ---- critic accuracy: is EVaR(Z(s,a)) right where the decision is made? ----
+    if args.critic == "c51q":
+        from analysis.c3_attribution import action_value_dist
+        table = {(r, c): greedy[(r, c)] for c in range(env.n_segments) for r in (0, 1)}
+        print()
+        print("  critic EVaR(Z(s,a)) vs exact, at the states the route visits:")
+        print("    %-14s %10s %10s %9s" % ("state/action", "exact", "critic", "error"))
+        worst, row = 0.0, 0
+        for col in range(env.n_segments):
+            for a in (0, 1):
+                v, p = action_value_dist(env, table, row, col, a)
+                exact = evar_exact(v, p, args.alpha)[0]
+                obs = np.zeros(env.n_states, dtype=np.float32)
+                obs[env.index(row, col)] = 1.0
+                with torch.no_grad():
+                    ev_a, _ = critic.evar_all_actions(
+                        state_to_tensor(obs).to(device).unsqueeze(0), cfg.evar)
+                got = float(ev_a[0, a].item())
+                worst = max(worst, abs(got - exact))
+                print("    col%d %-9s %10.2f %10.2f %9.2f"
+                      % (col, "safe" if a == 0 else "risky", exact, got, got - exact))
+            row = greedy[(row, col)]
+        print(f"    worst |critic - exact| = {worst:.2f}")
+
     # ---- the deep-extension rationale: does beta* vary across states? ----
     xmap = dual_variable_map(critic, env, cfg, device)
     xs = np.array(list(xmap.values()))
