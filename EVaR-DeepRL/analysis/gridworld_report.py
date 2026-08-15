@@ -55,7 +55,25 @@ def save(fig, out, stem):
 
 
 # ------------------------------------------------------------------ figure 1 --
-def _draw_grid(ax, env, lanes, title, subtitle):
+def _draw_route(ax, env, lanes, CW, CH, GAP, colour, dashed, halo, zorder):
+    def route_y(c):
+        return (1 - lanes[c]) * (CH + GAP) + CH * (0.17 if not dashed else 0.34)
+
+    pts = [(-GAP * 0.8, route_y(0))]
+    for c in range(env.n_segments):
+        pts.append((c * (CW + GAP), route_y(c)))
+        pts.append((c * (CW + GAP) + CW, route_y(c)))
+    pts.append((env.n_segments * (CW + GAP) - GAP * 0.2, pts[-1][1]))
+    xs, ys = zip(*pts)
+    ax.plot(xs, ys, color=colour, linewidth=2.0, zorder=zorder,
+            solid_capstyle="round", linestyle="--" if dashed else "-",
+            path_effects=halo)
+    ax.plot(xs[-1], ys[-1], marker=">", color=colour, markersize=8, zorder=zorder + 1,
+            path_effects=halo)
+    ax.plot(xs[0], ys[0], marker="o", color=colour, markersize=6, zorder=zorder + 1)
+
+
+def _draw_grid(ax, env, lanes, title, subtitle, learned=None):
     """One gridworld with the route drawn through it."""
     CW, CH, GAP = 1.22, 0.62, 0.26   # wide enough that payoff text fits inside
     for c, seg in enumerate(env.segments):

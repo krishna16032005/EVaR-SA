@@ -105,9 +105,14 @@ def main() -> None:
     parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument("--n-steps", type=int, default=32)
     parser.add_argument("--entropy-coef", type=float, default=0.05)
+    parser.add_argument("--no-advantage-norm", action="store_true",
+                        help="disable per-batch advantage normalisation. The expected "
+                             "gradient is risk-neutral in the immediate reward, so if the "
+                             "agent stops taking lotteries with this off, the risk-seeking "
+                             "was coming from the normalisation and not from EVaR")
     parser.add_argument("--n-atoms", type=int, default=151,
-                        help="returns here are integer valued in [10, 144], so delta_z=1 "
-                             "represents the distribution exactly")
+                        help="C51 atoms over the return-to-go range; 151 puts delta_z "
+                             "near 2 on the [0, 270] span these segments produce")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--results-dir", type=str, default=os.path.join("results", "gridworld"))
     parser.add_argument("--histogram-every", type=int, default=0)
@@ -152,6 +157,7 @@ def main() -> None:
         gamma=args.gamma,
         n_steps=args.n_steps,
         entropy_coef=args.entropy_coef,
+        normalize_advantage=not args.no_advantage_norm,
         max_episodes=args.episodes,
         max_steps_per_episode=env.n_segments,
         evar=EVaRConfig(alpha=args.alpha, x_min=1e-2, x_max=4.0 * (v_hi - v_lo)),
@@ -193,6 +199,18 @@ def main() -> None:
     print(f"  match         : {'YES' if seq_learned == seq_opt else 'NO'}   "
           f"regret {ev_opt - ev_learned:8.3f}  ({100*(ev_opt-ev_learned)/abs(ev_opt):.2f}%)")
 
+    # ---- is the policy actually decided, or is argmax reading a coin flip? ----
+    print()
+    print("  p(risky) at each decision state (argmax is meaningless if these sit near 0.5):")
+    conf = []
+    for col in range(env.n_segments):
+        row = greedy[(0, col)] if col == 0 else greedy[(greedy[(0, col - 1)], col - 1)]
+        ps, pr = pol(0 if col == 0 else row, col)
+        conf.append(abs(pr - 0.5))
+        print(f"    segment {col}: p(risky) = {pr:.3f}")
+    print(f"  mean |p - 0.5| = {float(np.mean(conf)):.3f}   "
+          f"(0.0 = undecided, 0.5 = fully committed)")
+
     # ---- the deep-extension rationale: does beta* vary across states? ----
     xmap = dual_variable_map(critic, env, cfg, device)
     xs = np.array(list(xmap.values()))
@@ -214,7 +232,8 @@ def main() -> None:
                  f"optimal_lanes\t{seq_opt}\nlearned_lanes\t{seq_learned}\n"
                  f"optimal_evar\t{ev_opt}\nlearned_evar\t{ev_learned}\n"
                  f"match\t{int(seq_learned == seq_opt)}\n"
-                 f"x_star_spread\t{spread}\n")
+                 f"x_star_spread\t{spread}\n"
+                 f"policy_decisiveness\t{float(np.mean(conf))}\n")
     print(f"Results dir: {run_dir}")
     if logs["wandb_run_id"]:
         print(f"wandb run id: {logs['wandb_run_id']}")

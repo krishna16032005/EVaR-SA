@@ -71,6 +71,10 @@ class TrainConfig:
     target_tau: float = 0.01
     iqn_k_eval: int = 32
     grad_clip: float = 5.0
+    # Per-batch advantage normalisation. On by default (standard A2C), but
+    # switchable: see the note at its use site -- it is a candidate source of
+    # risk-seeking behaviour independent of the EVaR operator.
+    normalize_advantage: bool = True
     evar: EVaRConfig = field(default_factory=EVaRConfig)
     log_every: int = 10
     seed: int = 0
@@ -381,7 +385,14 @@ def train(
             x_star_s = x_star_both[:batch]
             value_s = _critic_mean_value(critic, states, cfg)
             raw_advantage = rewards + cfg.gamma * (1.0 - dones) * evar_s_next - evar_s
-            if raw_advantage.numel() > 1:
+            # Switchable because it is a suspect, not a detail. In expectation this
+            # advantage is risk-neutral in the immediate reward -- the tilt only
+            # reaches EVaR(Z(s')) -- yet trained agents still take lotteries, so the
+            # risk-taking has to be entering somewhere else. Per-batch normalisation
+            # is nonlinear in the batch, so a rare huge reward does not contribute in
+            # proportion to its probability; turning it off tests whether that, and
+            # not the EVaR operator, is what makes the policy risk-seeking.
+            if cfg.normalize_advantage and raw_advantage.numel() > 1:
                 norm_advantage = (raw_advantage - raw_advantage.mean()) / (raw_advantage.std() + 1e-2)
             else:
                 norm_advantage = raw_advantage
