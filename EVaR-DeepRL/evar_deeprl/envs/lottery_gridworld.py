@@ -90,24 +90,39 @@ class Segment:
 #     x * log( p*exp(hi/x) + (1-p)*exp(lo/x) )  >  safe
 #
 # whose crossing point ``x_i`` depends only on that segment. Below ``x_i`` the
-# lottery wins, above it the safe lane does. Since ``x*`` grows with alpha (~10.6 at
-# alpha = 0.01 up to ~31 at 0.5), segments with well-separated ``x_i`` drop out one
-# at a time. The three below sit at ``x_i`` ~ 12, 22, 35.
+# lottery wins, above it the safe lane does; ``x*`` grows with alpha (12.7 at
+# alpha = 0.01 up to 58.8 at 0.5 for the segments below), so segments with separated
+# ``x_i`` drop out one at a time and the ground truth is a staircase:
 #
-# Two earlier hand-picked designs both came out optimal-all-risky for every alpha
-# from 0.01 to 0.5, flipping only at alpha = 1.0. The reason was that their lotteries
-# were nearly free -- total mean cost 1.85 against a max gain of +72 -- so no
-# risk-seeking alpha ever declined one. Separating ``x_i`` is what actually controls
-# this; matching ``alpha ~ p`` does not, because EVaR of the *summed* return is not
-# separable that way.
+#     alpha       0.01  0.05  0.1  0.2  0.3  0.5  1.0
+#     lotteries      3     2    2    2    2    1    0
+#
+# Two earlier hand-picked designs came out optimal-all-risky for every alpha from
+# 0.01 to 0.5, flipping only at alpha = 1.0: their lotteries were nearly free, so no
+# risk-seeking alpha ever declined one. Matching ``alpha ~ p`` does not control this
+# either, because EVaR of the *summed* return is not separable that way.
+#
+# The lotteries are also chosen so that going risky genuinely pays. They have to be
+# worse in mean -- otherwise a risk-neutral agent takes them too and the optima never
+# separate -- but only slightly. Taking all three gives up **6%** of the mean return
+# (28.10 against 30) and puts the best case at **270, nine times** what the safe route
+# can ever pay. An earlier set had a long shot costing 80% of its segment's expected
+# reward: it separated the optima, but made risk-seeking look pathological rather than
+# like a bet worth taking.
+#
+# Those two goals pull against each other -- gentler lotteries stay worth taking at
+# every alpha, which flattens the staircase back into a single flip -- so the segments
+# are not hand-tuned. They come from a search over the actual objective (>= 3 distinct
+# risky-lane counts, every lottery keeping >= 85% of the safe mean, upside maximised),
+# using the decoupling above to evaluate each candidate triple in one vectorised pass.
 #
 # The staggering also varies risk by depth, which forces beta*(s) to move across
 # states -- the signature that distinguishes this method from SPSA's single global
 # beta, and the thing CartPole could not exhibit (x*_std/x*_mean ~ 0.05 there).
 DEFAULT_SEGMENTS = (
-    Segment(safe=10.0, p=0.50, hi=14.0, lo=4.0),     # mean 9.00, x_i ~ 12.2
-    Segment(safe=10.0, p=0.10, hi=30.0, lo=6.0),     # mean 8.40, x_i ~ 21.7
-    Segment(safe=10.0, p=0.02, hi=100.0, lo=0.0),    # mean 2.00, x_i ~ 34.9
+    Segment(safe=10.0, p=0.02, hi=45.0, lo=8.5),     # mean 9.23,  8% below safe, pays 4.5x
+    Segment(safe=10.0, p=0.03, hi=45.0, lo=8.5),     # mean 9.59,  4% below safe, pays 4.5x
+    Segment(safe=10.0, p=0.03, hi=180.0, lo=4.0),    # mean 9.28,  7% below safe, pays 18x
 )
 
 
@@ -198,43 +213,47 @@ def return_distribution(env: LotteryGridWorld, policy, start=(0, 0)
     return values, probs / probs.sum()
 
 
-def render(env: LotteryGridWorld, policy=None, x_star=None, agent=None) -> str:
-    """ASCII view of the grid, optionally overlaid with a policy and beta*(s).
+def render(env: LotteryGridWorld, policy=None, x_star=None) -> str:
+    """ASCII view of the grid with the route the policy walks drawn through it.
 
-    Cheap to call from a training loop or a REPL, and it is what makes the
-    environment inspectable without opening a figure::
-
-        col          0            1            2
-        SAFE   >  [ 10.0 ]  >  [ 10.0 ]  >  [ 10.0 ]  > GOAL
-        RISKY  >  [14.0/4.0]  ...
+    The in-terminal counterpart of the path figure in
+    ``analysis/gridworld_report.py``, so the environment stays inspectable from a
+    REPL or mid-training without opening a file. ``o`` starts the route, ``--->``
+    reaches the goal, and a lane change shows as the route moving between rows.
     """
-    lines = []
-    head = "  col" + "".join(f"{c:^16d}" for c in range(env.n_segments))
-    lines.append(head)
-    safe_cells, risky_cells = [], []
-    for c, seg in enumerate(env.segments):
-        pick = ""
-        if policy is not None:
-            ps, pr = policy(0, c)
-            pick = " *" if ps >= pr else "  "
-        safe_cells.append(f"[{seg.safe:5.1f}]{pick}".center(16))
-        pickr = ""
-        if policy is not None:
-            ps, pr = policy(1, c) if c > 0 else policy(0, c)
-            pickr = " *" if pr > ps else "  "
-        risky_cells.append(f"[{seg.hi:.0f}/{seg.lo:.0f} p{seg.p:.2f}]{pickr}".center(16))
-    lines.append("  SAFE " + "".join(safe_cells) + " GOAL")
-    lines.append("  RISK " + "".join(risky_cells))
+    W = 17
+    lanes = None
+    if policy is not None:
+        lanes, row = [], 0
+        for c in range(env.n_segments):
+            ps, pr = policy(row, c)
+            a = 0 if ps >= pr else 1
+            lanes.append(a)
+            row = a
+
+    out = ["  col   " + "".join(f"{c:^{W}d}" for c in range(env.n_segments))]
+    for row, name in ((0, "SAFE "), (1, "RISKY")):
+        cells = []
+        for c, seg in enumerate(env.segments):
+            body = (f"[{seg.safe:.0f}]" if row == 0
+                    else f"[{seg.hi:.0f} p{seg.p:g}]")
+            on = lanes is not None and lanes[c] == row
+            fill = "-" if (on and c > 0 and lanes[c - 1] == row) else " "
+            cell = body.center(W, fill)
+            if on and c == 0:
+                cell = "o" + body.center(W - 1)
+            cells.append(cell)
+        tail = "---> GOAL" if (lanes is not None and lanes[-1] == row) else ""
+        out.append(f"  {name} " + "".join(cells) + tail)
     if x_star is not None:
         cells = []
         for c in range(env.n_segments):
-            v = x_star.get((0, c), float("nan"))
-            cells.append(f"x*={v:6.2f}".center(16))
-        lines.append("  x*(s)" + "".join(cells))
-    if agent is not None:
-        lines.append(f"  agent at row={agent[0]} col={agent[1]}")
-    lines.append("  ('*' marks the greedy action; RISK pays hi w.p. p, else lo)")
-    return "\n".join(lines)
+            r = lanes[c] if lanes else 0
+            cells.append(f"x*={x_star.get((r, c), float('nan')):6.2f}".center(W))
+        out.append("  x*(s) " + "".join(cells))
+    out.append("  RISKY pays hi with probability p, else lo"
+               + ("" if lanes is None else "; the drawn route is this policy's"))
+    return "\n".join(out)
 
 
 def evar_exact(values: np.ndarray, probs: np.ndarray, alpha: float,

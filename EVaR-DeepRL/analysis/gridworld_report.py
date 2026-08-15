@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import FancyBboxPatch
@@ -54,14 +55,106 @@ def save(fig, out, stem):
 
 
 # ------------------------------------------------------------------ figure 1 --
+def _draw_grid(ax, env, lanes, title, subtitle):
+    """One gridworld with the route drawn through it."""
+    CW, CH, GAP = 1.22, 0.62, 0.26   # wide enough that payoff text fits inside
+    for c, seg in enumerate(env.segments):
+        for row in (0, 1):
+            on = (lanes[c] == row)
+            colour = AQUA if row == 0 else ORANGE
+            y = (1 - row) * (CH + GAP)
+            ax.add_patch(FancyBboxPatch(
+                (c * (CW + GAP), y), CW, CH,
+                boxstyle="round,pad=0.01,rounding_size=0.05",
+                linewidth=1.6 if on else 0,
+                edgecolor=colour if on else "none",
+                facecolor=colour, alpha=0.30 if on else 0.07, zorder=1))
+            txt = (f"{seg.safe:.0f}" if row == 0
+                   else f"{seg.hi:.0f}  p={seg.p:g}\nelse {seg.lo:g}")
+            ax.text(c * (CW + GAP) + CW / 2, y + CH / 2, txt, ha="center", va="center",
+                    fontsize=9.5 if row == 0 else 7.9,
+                    color=INK if on else INK_SOFT, zorder=3,
+                    weight="bold" if on else "normal")
+
+    # The route: enter left, hop between lanes, exit right. It runs through the
+    # lower third of each cell rather than the middle so it does not strike through
+    # the payoff text, and carries a surface-coloured halo where it crosses a border.
+    def route_y(c):
+        return (1 - lanes[c]) * (CH + GAP) + CH * 0.17
+
+    pts = [(-GAP * 0.8, route_y(0))]
+    for c in range(env.n_segments):
+        pts.append((c * (CW + GAP), route_y(c)))
+        pts.append((c * (CW + GAP) + CW, route_y(c)))
+    pts.append((env.n_segments * (CW + GAP) - GAP * 0.2, pts[-1][1]))
+    xs, ys = zip(*pts)
+    halo = [pe.Stroke(linewidth=4.6, foreground=SURFACE), pe.Normal()]
+    ax.plot(xs, ys, color=INK, linewidth=2.0, zorder=5, solid_capstyle="round",
+            path_effects=halo)
+    ax.plot(xs[-1], ys[-1], marker=">", color=INK, markersize=8, zorder=6,
+            path_effects=halo)
+    ax.plot(xs[0], ys[0], marker="o", color=INK, markersize=6, zorder=6)
+
+    ax.set_xlim(-0.75, env.n_segments * (CW + GAP) + 0.1)
+    ax.set_ylim(-0.45, 2 * CH + GAP + 0.42)
+    ax.axis("off")
+    ax.set_title(title, fontsize=11, color=INK, loc="left", pad=9)
+    ax.text(-0.7, -0.30, subtitle, fontsize=8.8, color=INK_SOFT, ha="left", va="top")
+
+
+def fig_paths(env, out):
+    """The routes themselves: which lanes each risk appetite actually walks."""
+    # Group alphas by the policy they induce -- the policy only takes a few values,
+    # so one panel per distinct route says more than one panel per alpha.
+    groups, order = {}, []
+    for a in ALPHAS:
+        _, _, table, _, _ = optimal_policy(env, a)
+        seq = lane_sequence(env, table)
+        lanes = tuple(0 if s == "SAFE" else 1 for s in seq.split("-"))
+        if lanes not in groups:
+            groups[lanes] = []
+            order.append(lanes)
+        groups[lanes].append(a)
+
+    n = len(order)
+    fig, axes = plt.subplots(1, n, figsize=(4.15 * n, 3.6))
+    fig.patch.set_facecolor(SURFACE)
+    fig.subplots_adjust(top=0.74, bottom=0.12, wspace=0.16)
+    if n == 1:
+        axes = [axes]
+    for ax, lanes in zip(axes, order):
+        ax.set_facecolor(SURFACE)
+        alphas = groups[lanes]
+        rng = (f"alpha = {alphas[0]:g}" if len(alphas) == 1
+               else f"alpha {alphas[0]:g} to {alphas[-1]:g}")
+        def pol(r, c, _l=lanes):
+            return (1.0, 0.0) if _l[c] == 0 else (0.0, 1.0)
+        v, p = return_distribution(env, pol)
+        ev, _ = evar_exact(v, p, alphas[0])
+        mean, best = float((v * p).sum()), float(v.max())
+        n_risky = sum(lanes)
+        sub = (f"mean {mean:.1f}    best case {best:.0f}\n"
+               f"{n_risky} of 3 lotteries taken")
+        _draw_grid(ax, env, lanes, f"{rng}", sub)
+    fig.suptitle("The route each risk appetite walks: safe lane on top, lottery below\n"
+                 "as alpha falls the agent takes more lotteries, and the best case grows",
+                 fontsize=12.5, color=INK, x=0.006, ha="left", y=0.99, va="top")
+    for ext in ("png", "pdf"):
+        os.makedirs(out, exist_ok=True)
+        fig.savefig(os.path.join(out, f"gridworld_paths.{ext}"), dpi=200,
+                    facecolor=SURFACE)          # no bbox_inches: keep the reserved top
+    plt.close(fig)
+    print(f"  wrote {out}/gridworld_paths.png / .pdf")
+
+
 def fig_environment(env, out):
-    """Schematic of the grid. Not a chart -- a diagram; it carries the payoffs."""
+    """Payoffs and the mean/upside trade, without any policy drawn on it."""
     fig, ax = plt.subplots(figsize=(9.5, 3.4))
     ax.set_facecolor(SURFACE)
     for c, seg in enumerate(env.segments):
         for row, (color, label) in enumerate(
                 ((AQUA, f"{seg.safe:.0f}"),
-                 (ORANGE, f"{seg.hi:.0f} w.p. {seg.p:g}\nelse {seg.lo:.0f}"))):
+                 (ORANGE, f"{seg.hi:.0f} w.p. {seg.p:g}\nelse {seg.lo:g}"))):
             y = 1.0 if row == 0 else 0.0
             ax.add_patch(FancyBboxPatch(
                 (c * 1.25, y), 1.0, 0.72, boxstyle="round,pad=0.02,rounding_size=0.06",
@@ -73,7 +166,7 @@ def fig_environment(env, out):
                     ha="center", va="center", fontsize=8.5, color=INK_SOFT, zorder=3)
         ax.text(c * 1.25 + 0.5, 1.95, f"segment {c}", ha="center", fontsize=9,
                 color=INK_SOFT)
-        ax.text(c * 1.25 + 0.5, -0.35, f"$x_i$ = {SWITCH_X[c]:.1f}", ha="center",
+        ax.text(c * 1.25 + 0.5, -0.35, f"pays {seg.hi/seg.safe:.1f}x", ha="center",
                 fontsize=9, color=INK_SOFT)
     ax.text(-0.55, 1.36, "SAFE", ha="right", va="center", fontsize=11, color=AQUA,
             weight="bold")
@@ -83,8 +176,8 @@ def fig_environment(env, out):
     ax.set_xlim(-2.0, 4.9)
     ax.set_ylim(-0.6, 2.2)
     ax.axis("off")
-    ax.set_title("Every lottery is worse in mean and better in the tail\n"
-                 "so risk-neutral must go all-safe and risk-seeking must not",
+    ax.set_title("Each lottery costs a little mean and pays a lot in the tail\n"
+                 "all-risky: 6% less mean than all-safe, 9x the best case",
                  fontsize=11.5, color=INK, loc="left")
     save(fig, out, "gridworld_environment")
 
@@ -220,6 +313,7 @@ def main() -> None:
     print(render(env))
     print()
     trained = load_trained(args.trained_glob)
+    fig_paths(env, args.out)
     fig_environment(env, args.out)
     fig_c1(env, trained, args.out)
     fig_c3_mechanism(env, args.out)
