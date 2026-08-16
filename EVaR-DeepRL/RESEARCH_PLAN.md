@@ -123,9 +123,11 @@ the fix.
    means to this audience.
 6. **CVaR-AC** -- you already have `../swimmer_cvar.py` and
    `../gridworld_reinforce_cvar.py`; port the objective, reuse the harness.
-7. **DSAC / risk-sensitive SAC** -- only once continuous-control envs are the
-   focus; off-policy, so it is a different sample-efficiency regime and must be
-   compared on env steps, not updates.
+7. **DSAC / risk-sensitive SAC** -- ~~only once continuous-control envs are the
+   focus~~. Built (`agents/dsac_evar.py`), and it is now *our own learner* rather
+   than an external baseline: IQN action-value critic, twin critics with the min
+   taken over the **risk** value, tanh-squashed actor, auto entropy temperature.
+   Still off-policy, so it must be compared on env steps, not updates.
 
 ## The environment ladder
 
@@ -237,6 +239,62 @@ Next, in expected-payoff order:
 4. GPU stays pointless until nets are wide or IQN quantile counts are large; the
    A40 is for the scaled-up phase, not this one.
 
+## The learner that finally does continuous control
+
+`agents/dsac_evar.py`, validated on Pendulum-v1 at 60k steps, 2 seeds, with the
+`--risk mean` control sharing every other component:
+
+| arm | seed 0 | seed 1 |
+|---|---|---|
+| `mean` | -96.99 | -152.44 |
+| `evar` alpha=0.1 | -96.36 | -113.53 |
+
+Random policy is ~-1200, so both solve the task; the n-step A2C never left random
+on anything continuous. **EVaR tying the risk-neutral control here is the correct
+result, not a null one**: Pendulum's return spread is almost entirely policy noise,
+so there is no tail to seek and `alpha` should not matter. It is the same reasoning
+that retired CartPole, and it is why this run is plumbing validation rather than
+evidence. `x*` settles at 0.37-0.41 instead of pinning to a bound, which is the
+diagnostic that the dual solve is live.
+
+### Where the wall-clock goes, measured rather than guessed
+
+The EVaR arm ran at 49 steps/s against `mean` at 105, which looks like the risk
+solve being expensive. Profiling `SafetyPointGoal1-v0` says otherwise:
+
+| | |
+|---|---|
+| MuJoCo sim alone | 617 steps/s |
+| learner, `mean`, CPU | 40 updates/s |
+| learner, `evar`, CPU | 35 updates/s |
+
+The simulator is 30x faster than the learner, so the environment is never the
+bottleneck -- and on CPU the EVaR solve costs only **12%**, not 2x. The cost is
+therefore not arithmetic but *kernel launches*: on GPU the 256x256 nets are nearly
+free and the bisection's ~12 launches per step are what remains. Fixed by cutting
+`solver_steps` 30 -> 20 (measured equivalent to 2.5e-7 relative, float32 epsilon)
+and solving both twin critics in one stacked call (bit-identical, verified).
+
+**Infrastructure note:** safety-gymnasium 1.0.0 pins `gymnasium 0.28.1` against the
+main environment's `1.3.0`, so it lives in its own venv -- which shipped CPU-only
+torch. The two environments cannot be merged; the venv needs its own CUDA build.
+
+## The gap that actually blocks the paper
+
+Everything above establishes that the port is *correct*. Nothing yet establishes
+that it is *better*. On the discriminating gridworld EVaR reaches 97.9% of its own
+optimum -- the operator works -- but it is **statistically indistinguishable from
+CVaR and Wang**. A method that merely ties the standard distortion measures has no
+claim to make.
+
+So the remaining work is not solver quality. It is: (a) identify the environment
+class where optimizing `beta` buys something a *fixed* distortion cannot, and (b)
+the adaptive-`beta` mechanism, which is the contribution as such. EVaR's dual is
+the only one of these measures that adapts its tilt to the distribution it is
+handed; the experiment has to be one where that adaptivity is load-bearing --
+which means a return distribution whose shape *changes during training*, since a
+fixed distortion is tuned once and cannot follow it.
+
 ## Statistics for the paper
 
 10 seeds, and report IQM with stratified bootstrap CIs (rliable) rather than
@@ -275,8 +333,8 @@ Now, in order:
    only, so `run_invpend.py` and `run_safety.py` still carry the state-value critic
    and therefore the C3 defect. Everything queued for Safety-Gymnasium is currently
    built on the broken form. This blocks the whole continuous-control ladder.
-6. **A learner that can do continuous control.** This is now the binding
-   constraint on everything continuous, not one improvement among several.
+6. ~~**A learner that can do continuous control.**~~ **Done** -- see "The learner
+   that finally does continuous control" above. What follows was the diagnosis.
    Measured on `SafetyPointGoal1-v0` at `lambda = 0` -- cost priced at zero, so
    pure navigation with no risk machinery involved -- reward converges to
    random-policy level over 1500 episodes and stays: `c51qc` at -0.11 and -0.15,
