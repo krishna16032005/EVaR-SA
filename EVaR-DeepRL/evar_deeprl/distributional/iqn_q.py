@@ -45,6 +45,46 @@ from evar_deeprl.risk.evar import EVaRConfig, evar_from_distribution
 from evar_deeprl.risk.measures import RiskConfig, apply_risk
 
 
+def risk_from_samples(z: torch.Tensor, cfg: RiskConfig) -> torch.Tensor:
+    """Risk functional of equally-weighted quantile samples, batched over rows.
+
+    ``measures.apply_risk`` takes a single shared support, which is right for a
+    categorical critic but wrong here: every row of ``z`` is its own support. Looping
+    it per row cost the learner two orders of magnitude -- the first DSAC smoke test
+    ran at 11 steps/s, essentially all of it in that Python loop.
+    """
+    B, K = z.shape
+    kind = cfg.kind
+    if kind == "mean":
+        return z.mean(-1)
+    if kind == "meanvar":
+        return z.mean(-1) + cfg.kappa * z.std(-1)
+    if kind == "entropic":
+        b = cfg.beta
+        m = (b * z).max(dim=-1, keepdim=True).values
+        return (m.squeeze(-1) + torch.log(torch.exp(b * z - m).mean(-1))) / b
+
+    zs, _ = torch.sort(z, dim=-1, descending=True)                # best first
+    if kind == "cvar":
+        n = max(1, int(math.ceil(cfg.alpha * K)))
+        return zs[:, :n].mean(-1)
+
+    # distortion measures act on the survival function of the sorted samples
+    surv = torch.arange(1, K + 1, device=z.device, dtype=z.dtype).expand(B, K) / K
+    prev = surv - 1.0 / K
+    if kind == "wang":
+        nrm = torch.distributions.Normal(0.0, 1.0)
+        g = lambda u: nrm.cdf(nrm.icdf(u.clamp(1e-6, 1 - 1e-6)) + cfg.eta)
+    elif kind == "cpw":
+        e = cfg.eta
+        g = lambda u: (u.clamp(1e-6, 1 - 1e-6) ** e
+                       / ((u.clamp(1e-6, 1 - 1e-6) ** e
+                           + (1 - u.clamp(1e-6, 1 - 1e-6)) ** e) ** (1.0 / e)))
+    else:
+        raise ValueError(f"unknown risk measure {kind!r}")
+    return ((g(surv) - g(prev)) * zs).sum(-1)
+
+
 class IQNQCritic(nn.Module):
     """``Z(s,a)`` as implicit quantiles, for continuous actions."""
 
@@ -103,12 +143,7 @@ class IQNQCritic(nn.Module):
         """
         z = self.sample_z(state, action, k)                           # (B, K)
         if risk_cfg.kind != "evar":
-            probs = torch.full_like(z, 1.0 / z.shape[-1])
-            # apply_risk sorts internally; pass per-row support via a loop-free path
-            vals = torch.stack([
-                apply_risk(z[i], probs[i].unsqueeze(0), risk_cfg).squeeze(0)
-                for i in range(z.shape[0])])
-            return vals, None
+            return risk_from_samples(z, risk_cfg), None
 
         cfg = risk_cfg.evar_cfg or EVaRConfig(alpha=risk_cfg.alpha)
         if x_smoothing > 0.0 and x_prev is not None:

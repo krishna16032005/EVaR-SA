@@ -135,7 +135,9 @@
       "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/test_iqnq.py evar-box:/tmp/)",
       "Bash(git commit -q -m 'Add the IQN action-value critic with a robust EVaR solve *)",
       "Bash(scp -q evar_deeprl/policies/squashed_gaussian.py evar-box:/tmp/patch/pol/)",
-      "Bash(scp -q evar_deeprl/agents/dsac_evar.py experiments/run_dsac.py evar-box:/tmp/patch/)"
+      "Bash(scp -q evar_deeprl/agents/dsac_evar.py experiments/run_dsac.py evar-box:/tmp/patch/)",
+      "Bash(python3 -c \"import ast;ast.parse\\(open\\('evar_deeprl/distributional/iqn_q.py'\\).read\\(\\)\\);print\\('parses'\\)\")",
+      "Bash(ssh evar-box 'cd ~/EVaR-SA/EVaR-DeepRL && cp /tmp/patch/dist/iqn_q.py evar_deeprl/distributional/ && python -c \" *)"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af"
