@@ -285,6 +285,49 @@ and solving both twin critics in one stacked call (bit-identical, verified).
 main environment's `1.3.0`, so it lives in its own venv -- which shipped CPU-only
 torch. The two environments cannot be merged; the venv needs its own CUDA build.
 
+## SafetyPointGoal1: the learner works, the environment does not discriminate
+
+300k steps, cost priced at zero, with the matched risk-neutral control:
+
+| arm | final return | cost |
+|---|---|---|
+| `mean` | 26.99 | 56.30 |
+| `evar` alpha=0.1 | 27.39 | 49.30 |
+
+**The learner solves it.** That is the result to keep: the n-step A2C sat at
+random-policy reward here for 1500 episodes, and this reaches ~27 and holds. The
+continuous-control ladder is unblocked.
+
+**The environment cannot discriminate risk attitudes**, and this is now measured
+rather than suspected. A probe run logging the shape of `Z(s,a)` during training:
+
+| step | return | x* | sd(Z) | top-mass | at-bound |
+|---|---|---|---|---|---|
+| 5,000 | -0.00 | 0.0451 | 0.0754 | 0.017 | 0.00 |
+| 20,000 | 0.49 | 0.0084 | 0.0218 | 0.019 | 0.00 |
+| 35,000 | 10.80 | 0.0122 | 0.0228 | 0.017 | 0.00 |
+
+Read it in three parts. `at-bound` holds at 0, so the dual solve is finding
+interior optima and EVaR is not degenerating into fixed-beta entropic utility.
+`top-mass` sits at 0.017 against a floor of 1/K = 0.0156, so the distribution is
+spread rather than piled at its maximum and EVaR is a genuine tail average. Both
+operator checks pass.
+
+Then `sd(Z) ~ 0.022` against an episode return reaching ~10 -- **under 1% spread**.
+The per-state return distribution is nearly deterministic, so there is almost
+nothing for any risk attitude to trade, and the 1.5% gap between the arms is what
+that looks like. This is the stochasticity trap this document already warned about
+for MuJoCo, now confirmed on the Safety-Gymnasium task that was supposed to escape
+it. Pricing cost at zero is part of the cause -- it removes the risk/reward tension
+by construction -- but the deeper point stands: navigation with dense shaped reward
+is not a risky task.
+
+The consequence for the ladder: `cost_penalty > 0` is not an optional refinement to
+try later, it is the only thing that makes these environments risk experiments at
+all. `lambda` calibration moves back to the critical path, and now it can actually
+be done, because there is finally a policy to calibrate against rather than a
+random walk.
+
 ## The gap that actually blocks the paper
 
 Everything above establishes that the port is *correct*. Nothing yet establishes
