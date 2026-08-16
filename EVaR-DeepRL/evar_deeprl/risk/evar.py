@@ -34,12 +34,45 @@ class EVaRConfig:
     alpha: float = 0.1
     x_min: float = 1e-2
     x_max: float = 50.0
+    # x* = 1/beta* has *units of return*, so a fixed search interval is only valid
+    # at one return scale. Measured: x* ~ 0.34 * sd(Z) across four orders of
+    # magnitude, so with x_min = 1e-2 the solve starts pinning at sd ~ 0.03 (53% of
+    # rows) and is fully pinned at sd = 0.01 (100%), where it returns 0.0278 for a
+    # true EVaR of ~0.0198 -- a 40% overestimate. At the bound EVaR degenerates to
+    # `mean + x_min * log(1/alpha)`, i.e. fixed-beta entropic utility, which is the
+    # baseline the dual solve is supposed to beat.
+    #
+    # This is not hypothetical: Pendulum returns are O(100) and never exercised it,
+    # but SafetyPointGoal1 returns are O(0.1) and sit inside the pinned regime.
+    # With the interval derived per row from sd(Z) instead, nothing pins at any
+    # scale. `x_min`/`x_max` are kept as absolute fallbacks for degenerate rows and
+    # for callers that deliberately fix the interval (the x_smoothing trust region).
+    auto_scale_bounds: bool = True
+    rel_x_min: float = 1e-3      # multiples of sd(Z)
+    rel_x_max: float = 1e3
     # 20 bisections of a 13.8-nat log-range leave ~1e-5 precision in log x, and the
     # resulting EVaR agrees with a 60-step reference to 2.5e-7 relative -- float32
     # machine epsilon -- across return scales 0.1 to 100 and shifts -50 to +500.
     # The previous 30 bought nothing measurable and each step costs ~12 kernel
     # launches, which is the dominant per-update cost once the nets run on a GPU.
     solver_steps: int = 20
+
+
+# Diagnostics from the most recent solve. A module-level dict rather than a third
+# return value so no caller signature changes; the trainer reads it right after the
+# call it cares about.
+_last_solve_diagnostics: dict[str, float] = {}
+
+
+def last_solve_diagnostics() -> dict[str, float]:
+    """Bound-hitting statistics from the most recent :func:`evar_from_distribution`.
+
+    ``at_bound_frac`` is the one to watch: for ``alpha < 1`` a healthy solve holds it
+    at 0. It sat at 1.0 for every update of every run while the Newton solve was
+    broken, and again on any environment whose returns are small enough that a fixed
+    ``x_min`` exceeds the optimum.
+    """
+    return dict(_last_solve_diagnostics)
 
 
 def _log_mgf(atoms: torch.Tensor, log_weights: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
@@ -105,6 +138,10 @@ def evar_from_distribution(
     if config.alpha >= 1.0:
         mean = (log_weights.exp() * atoms).sum(dim=-1)
         x_star = atoms.new_full((batch,), config.x_max)
+        # No solve happens on this path, so the tripwire must not carry a stale
+        # reading from a previous batch into the risk-neutral control's logs.
+        _last_solve_diagnostics.update(at_bound_frac=0.0, at_lower_frac=0.0,
+                                       at_upper_frac=0.0, saturated_frac=0.0)
         return mean, x_star
 
     log_alpha = math.log(config.alpha)
@@ -148,8 +185,22 @@ def evar_from_distribution(
     # Bisecting in log x also makes the iteration scale-free, so a run whose returns
     # grow by an order of magnitude during training keeps the same precision.
     with torch.no_grad():
-        lo = atoms.new_full((batch,), math.log(config.x_min))
-        hi = atoms.new_full((batch,), math.log(config.x_max))
+        if config.auto_scale_bounds:
+            # Per-row interval in the row's own return units. Degenerate rows (sd 0)
+            # fall back to the absolute bounds, but they are also exactly the rows
+            # the saturated branch above has already claimed, so the value they get
+            # from the bisection is discarded either way.
+            mean_z = (weights_lin * atoms.nan_to_num(0.0)).sum(dim=-1, keepdim=True)
+            var_z = (weights_lin * (atoms - mean_z).nan_to_num(0.0) ** 2).sum(dim=-1)
+            sd = var_z.clamp_min(0.0).sqrt()
+            usable = sd > 0
+            lo = torch.where(usable, (sd * config.rel_x_min).log(),
+                             torch.full_like(sd, math.log(config.x_min)))
+            hi = torch.where(usable, (sd * config.rel_x_max).log(),
+                             torch.full_like(sd, math.log(config.x_max)))
+        else:
+            lo = atoms.new_full((batch,), math.log(config.x_min))
+            hi = atoms.new_full((batch,), math.log(config.x_max))
         for _ in range(config.solver_steps):
             mid = 0.5 * (lo + hi)
             below = _g_prime(mid.exp().unsqueeze(-1)) < 0
@@ -170,6 +221,27 @@ def evar_from_distribution(
     # atom, which is the correct derivative there: in this regime EVaR *is* that atom.
     evar = torch.where(saturated, z_max, evar)
     x_star = torch.where(saturated, x_star.new_full((), config.x_min), x_star)
+
+    # Standing tripwire. A solve that lands on either end of its interval is not a
+    # solve -- EVaR degenerates to entropic utility at a fixed beta, which is the
+    # baseline this is meant to beat, and it does so without raising anything. That
+    # has now happened twice for opposite reasons: x_max, when the Newton solve
+    # cycled between bounds, and x_min, when a fixed interval met returns of order
+    # 0.1. Reporting the fraction is what turns the next occurrence into a number on
+    # a dashboard instead of a month of confused results. Saturated rows are excluded
+    # because their x_min is a label, not a solution.
+    with torch.no_grad():
+        tol = 1e-3
+        at_lo = (x_star.log() - lo).abs() < tol
+        at_hi = (hi - x_star.log()).abs() < tol
+        live = ~saturated
+        n_live = live.sum().clamp_min(1)
+        _last_solve_diagnostics.update(
+            at_bound_frac=float(((at_lo | at_hi) & live).sum() / n_live),
+            at_lower_frac=float((at_lo & live).sum() / n_live),
+            at_upper_frac=float((at_hi & live).sum() / n_live),
+            saturated_frac=float(saturated.float().mean()),
+        )
     return evar, x_star
 
 

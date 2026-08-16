@@ -48,7 +48,7 @@ from evar_deeprl.distributional.iqn_q import (
     IQNQCritic, check_alpha_vs_k, risk_value_from_z)
 from evar_deeprl.logging_utils import RunLogger, WandbConfig
 from evar_deeprl.policies.squashed_gaussian import SquashedGaussianPolicy
-from evar_deeprl.risk.evar import EVaRConfig
+from evar_deeprl.risk.evar import EVaRConfig, last_solve_diagnostics
 from evar_deeprl.risk.measures import RiskConfig
 
 
@@ -252,6 +252,11 @@ def train_dsac(env, cfg: DSACConfig, device, run_config_extra=None):
                      "logp_mean": float(logp.mean()),
                      "risk_value_mean": float(rq.mean()),
                      "x_star_mean": float(x1.mean()) if x1 is not None else float("nan")}
+            if cfg.risk.kind == "evar":
+                # `at_bound_frac` is the tripwire: anything above 0 means the dual
+                # solve is hitting its interval rather than finding an interior
+                # optimum, and EVaR has quietly become fixed-beta entropic utility.
+                stats.update(last_solve_diagnostics())
 
         if step - last_log >= 1000 * cfg.log_every and returns:
             last_log = step

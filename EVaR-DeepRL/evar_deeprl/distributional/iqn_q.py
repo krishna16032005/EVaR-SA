@@ -108,8 +108,12 @@ def risk_value_from_z(z: torch.Tensor, risk_cfg: RiskConfig,
         lo = float(max(cfg.x_min, x_prev.mean().item() / (1.0 + x_smoothing)))
         hi = float(min(cfg.x_max, x_prev.mean().item() * (1.0 + x_smoothing)))
         if hi > lo:
+            # An explicit trust region and per-row auto-scaling are two different
+            # answers to "what interval"; taking both would let the auto bounds
+            # widen straight back out of the region the smoothing just imposed.
             cfg = EVaRConfig(alpha=cfg.alpha, x_min=lo, x_max=hi,
-                             solver_steps=cfg.solver_steps)
+                             solver_steps=cfg.solver_steps,
+                             auto_scale_bounds=False)
     return evar_from_distribution(z, None, cfg)
 
 
