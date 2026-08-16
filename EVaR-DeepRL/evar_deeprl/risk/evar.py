@@ -201,6 +201,11 @@ def evar_from_distribution(
         else:
             lo = atoms.new_full((batch,), math.log(config.x_min))
             hi = atoms.new_full((batch,), math.log(config.x_max))
+        # Keep the interval the search *started* from. Bisection drives lo and hi
+        # onto x_star, so comparing the solution against the post-loop bounds
+        # compares it against itself and reports every solve as bound-hitting --
+        # which is exactly what the first version of this diagnostic did.
+        lo0, hi0 = lo.clone(), hi.clone()
         for _ in range(config.solver_steps):
             mid = 0.5 * (lo + hi)
             below = _g_prime(mid.exp().unsqueeze(-1)) < 0
@@ -231,9 +236,12 @@ def evar_from_distribution(
     # a dashboard instead of a month of confused results. Saturated rows are excluded
     # because their x_min is a label, not a solution.
     with torch.no_grad():
-        tol = 1e-3
-        at_lo = (x_star.log() - lo).abs() < tol
-        at_hi = (hi - x_star.log()).abs() < tol
+        # One bisection's worth of slack: after n steps the solution can be no
+        # closer to a bound than the final interval width without having converged
+        # onto it.
+        tol = (hi0 - lo0).abs() / (2 ** config.solver_steps) + 1e-6
+        at_lo = (x_star.log() - lo0).abs() < tol
+        at_hi = (hi0 - x_star.log()).abs() < tol
         live = ~saturated
         n_live = live.sum().clamp_min(1)
         # Shape of the distribution being tilted. When at_lower_frac is high these
