@@ -111,6 +111,26 @@ class RunningNorm:
         return np.clip(z, -10.0, 10.0).astype(np.float32)
 
 
+def sample_for_rollout(actor, obs):
+    """Sample an action, returning (raw, env_action, logp).
+
+    The PPO ratio must be evaluated on the *unclamped* sample. GaussianPolicy.act
+    clamps to the action bound before returning, and the density at a clamped
+    boundary point swings violently once the mean drifts outside the bound -- which
+    makes exp(new_logp - old_logp) explode. Observed: approx KL of 64 on one run and
+    1.4e16 on another, which the pre-step guard caught but which made the whole
+    update useless. Keep the raw sample for the ratio; clamp only what the env sees.
+    """
+    dist = actor.distribution(obs)
+    raw = dist.sample()
+    logp = dist.log_prob(raw)
+    if logp.dim() > 1:
+        logp = logp.sum(-1)
+    bound = getattr(actor, "action_bound", None)
+    env_action = raw if bound is None else raw.clamp(-bound, bound)
+    return raw, env_action, logp
+
+
 def policy_logp_entropy(actor, obs, actions):
     """log pi(a|s) and entropy, for both the categorical and Gaussian actors."""
     dist = actor.distribution(obs)
@@ -166,7 +186,7 @@ def baseline_value(critic, obs, actor, cfg):
             return (pi * q).sum(-1)
         total = None
         for _ in range(cfg.baseline_samples):
-            a, _ = actor.act(obs)
+            _, a, _ = sample_for_rollout(actor, obs)
             v = risk_value(critic, obs, a, cfg)
             total = v if total is None else total + v
         return total / cfg.baseline_samples
@@ -216,9 +236,8 @@ def train_ppo(env, actor, critic, cfg: PPOConfig, device, run_config_extra=None)
             norm = obs_norm(raw_obs) if cfg.normalize_obs else np.asarray(raw_obs, np.float32)
             obs_t = torch.as_tensor(norm, device=device)
             with torch.no_grad():
-                action, _ = actor.act(obs_t)
-                logp, _ = policy_logp_entropy(actor, obs_t, action)
-            step_out = env.step(action.cpu().numpy())
+                raw_action, env_action, logp = sample_for_rollout(actor, obs_t)
+            step_out = env.step(env_action.cpu().numpy())
             if len(step_out) == 6:                     # safety-gymnasium
                 nxt, reward, cost, term, trunc, _ = step_out
                 cost = np.asarray(cost, dtype=np.float32)
@@ -231,7 +250,8 @@ def train_ppo(env, actor, critic, cfg: PPOConfig, device, run_config_extra=None)
             trunc = np.asarray(trunc, dtype=bool)
 
             obs_buf.append(obs_t)
-            act_buf.append(action)
+            # the raw sample, so the ratio is a density ratio of the same point
+            act_buf.append(raw_action)
             logp_buf.append(logp)
             rew_buf[t] = reward
             # `terminated` only: a time-limit truncation must still bootstrap, or the
@@ -257,7 +277,7 @@ def train_ppo(env, actor, critic, cfg: PPOConfig, device, run_config_extra=None)
         with torch.no_grad():
             last = obs_norm(raw_obs) if cfg.normalize_obs else np.asarray(raw_obs, np.float32)
             last_t = torch.as_tensor(last, device=device)
-            boot_a, _ = actor.act(last_t)
+            _, boot_a, _ = sample_for_rollout(actor, last_t)
             boot = mean_of(critic, last_t, boot_a).cpu().numpy()
         returns = np.zeros((T, N), dtype=np.float32)
         running = boot
@@ -269,8 +289,10 @@ def train_ppo(env, actor, critic, cfg: PPOConfig, device, run_config_extra=None)
         # ---- advantage from the critic, computed once under the old policy ----
         flat_obs = obs_b.reshape(T * N, -1)
         flat_act = act_b.reshape(T * N, -1) if act_b.dim() == 3 else act_b.reshape(-1)
+        bound = getattr(actor, "action_bound", None)
+        flat_env_act = flat_act if bound is None else flat_act.clamp(-bound, bound)
         with torch.no_grad():
-            q = risk_value(critic, flat_obs, flat_act, cfg)
+            q = risk_value(critic, flat_obs, flat_env_act, cfg)
             b = baseline_value(critic, flat_obs, actor, cfg)
             adv = q - b
             if cfg.normalize_advantage:
@@ -326,7 +348,7 @@ def train_ppo(env, actor, critic, cfg: PPOConfig, device, run_config_extra=None)
                 a_gn = nn.utils.clip_grad_norm_(actor.parameters(), cfg.grad_clip)
                 actor_opt.step()
 
-                critic_loss = critic.regression_loss(flat_obs[j], flat_act[j], ret_t[j])
+                critic_loss = critic.regression_loss(flat_obs[j], flat_env_act[j], ret_t[j])
                 critic_opt.zero_grad()
                 critic_loss.backward()
                 c_gn = nn.utils.clip_grad_norm_(critic.parameters(), cfg.grad_clip)
@@ -342,7 +364,7 @@ def train_ppo(env, actor, critic, cfg: PPOConfig, device, run_config_extra=None)
         recent = finished_returns[-50:]
         rec_cost = finished_costs[-50:]
         with torch.no_grad():
-            pred = mean_of(critic, flat_obs, flat_act).cpu().numpy()
+            pred = mean_of(critic, flat_obs, flat_env_act).cpu().numpy()
         record = {
             "update": update,
             "global_step": global_step,
