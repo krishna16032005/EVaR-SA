@@ -44,7 +44,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from evar_deeprl.distributional.iqn_q import IQNQCritic, check_alpha_vs_k
+from evar_deeprl.distributional.iqn_q import (
+    IQNQCritic, check_alpha_vs_k, risk_value_from_z)
 from evar_deeprl.logging_utils import RunLogger, WandbConfig
 from evar_deeprl.policies.squashed_gaussian import SquashedGaussianPolicy
 from evar_deeprl.risk.evar import EVaRConfig
@@ -209,10 +210,14 @@ def train_dsac(env, cfg: DSACConfig, device, run_config_extra=None):
 
                 # ---- actor: maximise the RISK value, not the mean ----
                 anew, logp = actor.act(o)
-                r1, x1 = q1.risk_value(o, anew, cfg.risk, k=cfg.n_quantiles_risk,
-                                       x_prev=x_prev, x_smoothing=cfg.x_smoothing)
-                r2, _ = q2.risk_value(o, anew, cfg.risk, k=cfg.n_quantiles_risk,
-                                      x_prev=x_prev, x_smoothing=cfg.x_smoothing)
+                # One solve on the stacked twin batch rather than two. Rows are
+                # independent inside the solver, so this is exactly equivalent and
+                # halves the bisection's kernel launches -- the dominant per-update
+                # cost on GPU, where the nets themselves are nearly free.
+                zz = torch.cat([q1.sample_z(o, anew, k=cfg.n_quantiles_risk),
+                                q2.sample_z(o, anew, k=cfg.n_quantiles_risk)], dim=0)
+                rr, x1 = risk_value_from_z(zz, cfg.risk, x_prev, cfg.x_smoothing)
+                r1, r2 = rr.split(o.shape[0], dim=0)
                 rq = torch.min(r1, r2)
                 aloss = (log_ent.exp().detach() * logp - rq).mean()
                 a_opt.zero_grad()
