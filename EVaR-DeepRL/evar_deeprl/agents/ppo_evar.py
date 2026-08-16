@@ -29,10 +29,12 @@ scalar* reward inside the tilt changes nothing, and at a terminal step alpha dro
 out entirely. Measured exactly on the lottery gridworld that costs up to 86.35% of
 the optimum, against 0.00% for this form -- `analysis/c3_attribution.py`.
 
-`risk_objective="mean"` swaps EVaR for the distribution's mean using the same nets
-and the same data, which is the risk-neutral control (baseline 3 in the plan) and
-the only way to attribute a difference to the risk operator rather than to the
-distributional critic.
+The functional is pluggable (:mod:`evar_deeprl.risk.measures`): EVaR, upper-tail
+CVaR, Wang's distortion, fixed-beta entropic risk, mean-variance, or the plain
+mean. They all read the same critic output at the same point, so a comparison
+across them varies the risk measure and nothing else -- same nets, same data, same
+optimiser, same seeds. `mean` is the risk-neutral floor; `entropic` at fixed beta
+is the sharpest rival, since EVaR *is* entropic risk with beta optimised.
 
 Critic targets
 --------------
@@ -56,6 +58,7 @@ import torch.nn.functional as F
 
 from evar_deeprl.logging_utils import RunLogger, WandbConfig
 from evar_deeprl.risk.evar import EVaRConfig
+from evar_deeprl.risk.measures import RiskConfig, apply_risk
 
 
 @dataclass
@@ -76,7 +79,7 @@ class PPOConfig:
     normalize_advantage: bool = True
     normalize_obs: bool = True
     evar: EVaRConfig = field(default_factory=EVaRConfig)
-    risk_objective: str = "evar"       # "evar" | "mean"
+    risk: RiskConfig = field(default_factory=RiskConfig)   # which functional
     baseline_samples: int = 4
     cost_penalty: float = 0.0          # lambda for safety-gymnasium's cost channel
     seed: int = 0
@@ -131,13 +134,18 @@ def mean_of(critic, obs, actions):
 
 
 def risk_value(critic, obs, actions, cfg):
-    """EVaR (or mean) of Z(s,a) -- the quantity the actor is pushed toward."""
-    if cfg.risk_objective == "mean":
-        return mean_of(critic, obs, actions)
+    """The risk functional applied to Z(s,a) -- what the actor is pushed toward.
+
+    Every measure reads the same critic output, so a comparison across them varies
+    the functional and nothing else.
+    """
     if _discrete(critic):
-        return critic.evar_taken(obs, cfg.evar, actions)[0]
-    ev, _ = critic.evar(obs, cfg.evar, actions)
-    return ev
+        p = critic.probs(obs)                                   # (B, A, N)
+        idx = actions.long().view(-1, 1, 1).expand(-1, 1, p.shape[-1])
+        p = p.gather(1, idx).squeeze(1)                          # (B, N)
+    else:
+        p = critic.probs(obs, actions)                           # (B, N)
+    return apply_risk(critic.support, p, cfg.risk)
 
 
 def baseline_value(critic, obs, actor, cfg):
@@ -152,10 +160,9 @@ def baseline_value(critic, obs, actor, cfg):
     with torch.no_grad():
         if _discrete(critic):
             pi = actor.distribution(obs).probs                    # (B, A)
-            if cfg.risk_objective == "mean":
-                q = (critic.probs(obs) * critic.support).sum(-1)  # (B, A)
-            else:
-                q, _ = critic.evar_all_actions(obs, cfg.evar)     # (B, A)
+            p = critic.probs(obs)                                 # (B, A, N)
+            B, A, N = p.shape
+            q = apply_risk(critic.support, p.reshape(B * A, N), cfg.risk).view(B, A)
             return (pi * q).sum(-1)
         total = None
         for _ in range(cfg.baseline_samples):
@@ -174,7 +181,7 @@ def train_ppo(env, actor, critic, cfg: PPOConfig, device, run_config_extra=None)
 
     logger = RunLogger(cfg.wandb, run_config={**(run_config_extra or {}),
                                           "algo": "ppo-evar",
-                                          "risk_objective": cfg.risk_objective,
+                                          "risk": cfg.risk.label(),
                                           "alpha": cfg.evar.alpha,
                                           "n_envs": cfg.n_envs,
                                           "n_steps": cfg.n_steps,
@@ -294,11 +301,26 @@ def train_ppo(env, actor, critic, cfg: PPOConfig, device, run_config_extra=None)
             for s in range(0, batch, mb):
                 j = torch.as_tensor(idx[s:s + mb], device=device)
                 new_logp, ent = policy_logp_entropy(actor, flat_obs[j], flat_act[j])
-                ratio = (new_logp - flat_logp[j]).exp()
+                logratio = new_logp - flat_logp[j]
+                ratio = logratio.exp()
+                # Check the trust region BEFORE stepping. Checking afterwards means
+                # the damaging update has already been applied: on SafetyPointGoal1
+                # the KL reached 1.55 and the Gaussian mean head went NaN on the next
+                # forward, killing a run that had been learning (return 0 -> 6.97).
+                with torch.no_grad():
+                    kl_now = float(((ratio - 1) - logratio).mean())
+                if not np.isfinite(kl_now) or (
+                        cfg.target_kl is not None and kl_now > 1.5 * cfg.target_kl):
+                    approx_kl = kl_now
+                    stop = True
+                    break
                 a_j = adv[j]
                 loss1 = -a_j * ratio
                 loss2 = -a_j * ratio.clamp(1 - cfg.clip_coef, 1 + cfg.clip_coef)
                 actor_loss = torch.max(loss1, loss2).mean() - cfg.entropy_coef * ent.mean()
+                if not torch.isfinite(actor_loss):
+                    stop = True
+                    break
                 actor_opt.zero_grad()
                 actor_loss.backward()
                 a_gn = nn.utils.clip_grad_norm_(actor.parameters(), cfg.grad_clip)

@@ -98,7 +98,14 @@
       "Bash(scp -q evar_deeprl/agents/ppo_evar.py evar-box:/tmp/patch/)",
       "Bash(scp -q evar_deeprl/distributional/c51q.py evar_deeprl/distributional/c51qc.py evar-box:/tmp/patch/dist/)",
       "Bash(scp -q experiments/run_ppo.py evar-box:/tmp/patch/)",
-      "Bash(scp -q evar_deeprl/distributional/c51q.py evar_deeprl/agents/ppo_evar.py evar-box:/tmp/patch/)"
+      "Bash(scp -q evar_deeprl/distributional/c51q.py evar_deeprl/agents/ppo_evar.py evar-box:/tmp/patch/)",
+      "Bash(ssh -o ConnectTimeout=15 evar-box 'grep -q \"^finished\" /tmp/ppo_val.log 2>/dev/null')",
+      "Bash(python3 -c \"import ast;ast.parse\\(open\\('evar_deeprl/agents/ppo_evar.py'\\).read\\(\\)\\);print\\('parses'\\)\")",
+      "Bash(ssh -o ConnectTimeout=15 evar-box 'grep -q \"^finished\" /tmp/sg_run.log 2>/dev/null')",
+      "Bash(scp -q evar_deeprl/risk/measures.py evar-box:/tmp/patch/risk/)",
+      "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/test_measures.py evar-box:/tmp/)",
+      "Bash(python3 -c \"import ast;ast.parse\\(open\\('experiments/run_ppo.py'\\).read\\(\\)\\);print\\('parses'\\)\")",
+      "Bash(scp -q evar_deeprl/agents/ppo_evar.py evar_deeprl/risk/measures.py experiments/run_ppo.py evar-box:/tmp/patch/)"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af"

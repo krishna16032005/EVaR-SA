@@ -1,7 +1,7 @@
 """Run the vectorized PPO learner on CartPole, MuJoCo, or Safety-Gymnasium.
 
     # sanity: the learner must clear this before anything harder is meaningful
-    python experiments/run_ppo.py --env CartPole-v1 --total-steps 300000 --risk-objective mean
+    python experiments/run_ppo.py --env CartPole-v1 --total-steps 300000 --risk mean
 
     # the paper's env
     python experiments/run_ppo.py --env InvertedPendulum-v5 --total-steps 1000000
@@ -10,10 +10,11 @@
     MUJOCO_GL=egl ~/envs/safety/bin/python experiments/run_ppo.py \
         --env SafetyPointGoal1-v0 --total-steps 2000000 --cost-penalty 0.25
 
-`--risk-objective mean` uses the same nets, data and code path with the
-distribution's mean in place of EVaR. That is the risk-neutral control, and the
-only way to attribute a difference to the risk operator rather than to the
-distributional critic.
+`--risk` selects the functional applied to Z(s,a): evar, cvar, wang, entropic,
+meanvar, or mean. They all read the same critic at the same point, so sweeping it
+varies the risk measure and nothing else -- same nets, same data, same optimiser,
+same seeds. `mean` is the risk-neutral floor and `entropic` at fixed beta is the
+sharpest rival, since EVaR is entropic risk with beta optimised.
 """
 from __future__ import annotations
 
@@ -33,6 +34,7 @@ from evar_deeprl.logging_utils import add_wandb_args, wandb_config_from_args
 from evar_deeprl.policies.categorical import CategoricalPolicy
 from evar_deeprl.policies.gaussian import GaussianPolicy
 from evar_deeprl.risk.evar import EVaRConfig
+from evar_deeprl.risk.measures import KINDS, RiskConfig
 from evar_deeprl.utils import new_run_tag, resolve_device, save_records
 
 
@@ -73,7 +75,13 @@ def main() -> None:
     p.add_argument("--n-steps", type=int, default=128)
     p.add_argument("--max-episode-steps", type=int, default=None)
     p.add_argument("--alpha", type=float, default=0.1)
-    p.add_argument("--risk-objective", choices=["evar", "mean"], default="evar")
+    p.add_argument("--risk", choices=list(KINDS), default="evar",
+                   help="risk functional applied to Z(s,a). All read the same critic "
+                        "at the same point, so a sweep over this varies the measure "
+                        "and nothing else")
+    p.add_argument("--eta", type=float, default=0.75, help="wang / cpw parameter")
+    p.add_argument("--beta", type=float, default=0.05, help="fixed-beta entropic risk")
+    p.add_argument("--kappa", type=float, default=1.0, help="mean-variance weight")
     p.add_argument("--cost-penalty", type=float, default=0.0)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--epochs", type=int, default=10)
@@ -117,30 +125,32 @@ def main() -> None:
 
     run_tag = new_run_tag()
     run_dir = os.path.join(args.results_dir,
-                           f"{args.env}_{args.risk_objective}_a{args.alpha}_s{args.seed}_{run_tag}")
+                           f"{args.env}_{args.risk}_a{args.alpha}_s{args.seed}_{run_tag}")
     wandb_cfg = wandb_config_from_args(args)
     wandb_cfg.run_name = (args.wandb_run_name
-                          or f"ppo-{args.env}-{args.risk_objective}-a{args.alpha}-s{args.seed}-{run_tag}")
-    wandb_cfg.tags = tuple(wandb_cfg.tags) + (args.env, "ppo", args.risk_objective)
+                          or f"ppo-{args.env}-{args.risk}-a{args.alpha}-s{args.seed}-{run_tag}")
+    wandb_cfg.tags = tuple(wandb_cfg.tags) + (args.env, "ppo", args.risk)
 
+    risk_cfg = RiskConfig(kind=args.risk, alpha=args.alpha, eta=args.eta,
+                          beta=args.beta, kappa=args.kappa,
+                          evar_cfg=EVaRConfig(alpha=args.alpha, x_min=1e-2,
+                                              x_max=4.0 * max(abs(v_min), abs(v_max))))
     cfg = PPOConfig(
         n_envs=args.n_envs, n_steps=args.n_steps, total_steps=args.total_steps,
         gamma=args.gamma, actor_lr=args.actor_lr, critic_lr=args.critic_lr,
         epochs=args.epochs, minibatches=args.minibatches, clip_coef=args.clip_coef,
         entropy_coef=args.entropy_coef,
-        evar=EVaRConfig(alpha=args.alpha, x_min=1e-2,
-                        x_max=4.0 * max(abs(v_min), abs(v_max))),
-        risk_objective=args.risk_objective, cost_penalty=args.cost_penalty,
+        risk=risk_cfg, cost_penalty=args.cost_penalty,
         seed=args.seed, wandb=wandb_cfg, torch_threads=args.torch_threads,
         log_every=args.log_every)
 
     print(f"[setup] {args.env}  {'discrete' if discrete else 'continuous'}  "
           f"obs {obs_dim}  support [{v_min:.1f}, {v_max:.1f}] x {args.n_atoms} atoms  "
-          f"objective={args.risk_objective} alpha={args.alpha}")
+          f"risk={risk_cfg.label()}")
 
     logs = train_ppo(env, actor, critic, cfg, device,
                      run_config_extra={"env_id": args.env, "device": str(device)})
-    save_records(run_dir, f"ppo_{args.env}_{args.risk_objective}", logs)
+    save_records(run_dir, f"ppo_{args.env}_{args.risk}", logs)
     print(f"Results dir: {run_dir}")
     if logs["wandb_run_id"]:
         print(f"wandb run id: {logs['wandb_run_id']}")
