@@ -126,6 +126,32 @@ DEFAULT_SEGMENTS = (
 )
 
 
+# A second configuration, found by analysis/discriminating_env.py, where the risk
+# measures select *different* optimal policies. DEFAULT_SEGMENTS is tuned so the
+# optimal number of lotteries falls with alpha (the C1 staircase), but there every
+# measure converges on essentially the same policy: measured, all six reach ~100% of
+# the achievable EVaR at every training budget from 20k to 250k steps, so no
+# comparison between them is possible on it.
+#
+# Here they split. Exact optima:
+#
+#     mean       SAFE-SAFE-SAFE     30.00
+#     evar0.1    RISKY-RISKY-RISKY  48.24
+#     cvar0.1    RISKY-RISKY-SAFE   43.50
+#     wang0.75   SAFE-RISKY-RISKY   32.64
+#     entropic   SAFE-RISKY-SAFE    30.19
+#     meanvar1   SAFE-RISKY-RISKY   34.13
+#
+# Five distinct policies across six measures, which is what makes "method X found
+# its own optimum and method Y did not" a statement about the method rather than an
+# artefact of scoring.
+DISCRIMINATING_SEGMENTS = (
+    Segment(safe=10.0, p=0.05, hi=25.0, lo=8.0),     # mean 8.85
+    Segment(safe=10.0, p=0.05, hi=25.0, lo=9.0),     # mean 9.80
+    Segment(safe=10.0, p=0.20, hi=18.0, lo=6.0),     # mean 8.40
+)
+
+
 class LotteryGridWorld:
     """Gymnasium-style 5-tuple env over a 2 x (n_segments+1) grid."""
 

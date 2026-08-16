@@ -40,11 +40,15 @@ from evar_deeprl.utils import new_run_tag, resolve_device, save_records
 
 def make_vector_env(env_id: str, n_envs: int, max_steps: int | None):
     """Vector env for whichever package owns this id."""
-    if env_id == "LotteryGridWorld":
+    if env_id in ("LotteryGridWorld", "LotteryGridWorldDisc"):
         import gymnasium as gym
-        from evar_deeprl.envs.lottery_gridworld import LotteryGridWorld
+        from evar_deeprl.envs.lottery_gridworld import (
+            DEFAULT_SEGMENTS, DISCRIMINATING_SEGMENTS, LotteryGridWorld)
+        segs = (DISCRIMINATING_SEGMENTS if env_id.endswith("Disc")
+                else DEFAULT_SEGMENTS)
         return gym.vector.SyncVectorEnv(
-            [(lambda i=i: LotteryGridWorld(seed=1000 + i)) for i in range(n_envs)]), False
+            [(lambda i=i: LotteryGridWorld(segs, seed=1000 + i))
+             for i in range(n_envs)]), False
     if env_id.startswith("Safety"):
         import safety_gymnasium
         kwargs = {} if max_steps is None else {"max_episode_steps": max_steps}
@@ -64,6 +68,8 @@ def support_for(env_id: str, gamma: float, cost_penalty: float) -> tuple[float, 
     # gamma = 1 is legitimate for short episodic tasks (the gridworld is 3 steps and
     # its objective is the undiscounted trajectory return), so guard the horizon.
     horizon = 1.0 / max(1.0 - gamma, 1e-3)
+    if env_id == "LotteryGridWorldDisc":
+        return -5.0, 80.0             # max 25+25+18 = 68
     if env_id == "LotteryGridWorld":
         return -5.0, 285.0            # 3 segments, max 45+45+180 = 270
     if env_id.startswith("CartPole"):

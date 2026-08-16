@@ -121,7 +121,12 @@
       "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/sg_table.py evar-box:/tmp/)",
       "Bash(scp -q /tmp/sg_table2.py evar-box:/tmp/)",
       "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/report_full.py evar-box:/tmp/)",
-      "Bash(git commit -q -m 'Write down the contribution, the papers to reproduce, and the environments *)"
+      "Bash(git commit -q -m 'Write down the contribution, the papers to reproduce, and the environments *)",
+      "Bash(ssh -o ConnectTimeout=15 evar-box 'grep -q \"^finished\" /tmp/diag.log 2>/dev/null')",
+      "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/diag_table.py evar-box:/tmp/)",
+      "Bash(scp -q analysis/discriminating_env.py evar-box:/tmp/patch/analysis/)",
+      "Bash(python3 -c \"import ast;[ast.parse\\(open\\(f\\).read\\(\\)\\) for f in \\('evar_deeprl/envs/lottery_gridworld.py','experiments/run_ppo.py'\\)];print\\('parse ok'\\)\")",
+      "Bash(git commit -q -m 'Add a gridworld configuration where the risk measures actually disagree *)"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af"
