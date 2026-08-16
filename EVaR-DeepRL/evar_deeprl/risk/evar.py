@@ -236,11 +236,26 @@ def evar_from_distribution(
         at_hi = (hi - x_star.log()).abs() < tol
         live = ~saturated
         n_live = live.sum().clamp_min(1)
+        # Shape of the distribution being tilted. When at_lower_frac is high these
+        # say whether the solver or the critic is at fault: the dual optimum runs to
+        # x -> 0 exactly when the tilted measure collapses onto the top of the
+        # support, so a large `top_mass_frac` means the *critic* has produced a
+        # near-degenerate Z and EVaR correctly reports something close to its
+        # maximum. A small one with the same pinning would indict the solver.
+        # `saturated` only catches exact ties at the maximum; mass merely *near* it
+        # drives the same behaviour without tripping that branch.
+        sd_z = ((weights_lin * (atoms - (weights_lin * atoms).sum(-1, keepdim=True)) ** 2)
+                .sum(-1).clamp_min(0.0).sqrt())
+        near_top = (atoms >= (z_max.unsqueeze(-1) - 0.05 * sd_z.unsqueeze(-1)))
+        top_mass = (weights_lin * near_top).sum(dim=-1)
         _last_solve_diagnostics.update(
             at_bound_frac=float(((at_lo | at_hi) & live).sum() / n_live),
             at_lower_frac=float((at_lo & live).sum() / n_live),
             at_upper_frac=float((at_hi & live).sum() / n_live),
             saturated_frac=float(saturated.float().mean()),
+            z_sd_mean=float(sd_z.mean()),
+            z_range_mean=float((z_max - masked.min(dim=-1).values).mean()),
+            top_mass_frac=float(top_mass.mean()),
         )
     return evar, x_star
 
