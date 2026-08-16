@@ -78,6 +78,18 @@ class C51QCritic(C51Critic):
             return q.max(dim=-1).values
         return (q * action_probs).sum(dim=-1)
 
+    def mean_value_taken(self, state: torch.Tensor, actions: torch.Tensor):
+        """Mean of Z(s,a) for the action actually taken -- the discrete counterpart
+        of the continuous critic's ``mean_value(state, action)``."""
+        q = (self.probs(state) * self.support).sum(dim=-1)          # (B, A)
+        return q.gather(1, actions.long().view(-1, 1)).squeeze(1)
+
+    def evar_taken(self, state: torch.Tensor, config: EVaRConfig, actions: torch.Tensor):
+        """EVaR of Z(s,a) for the action actually taken."""
+        ev, x = self.evar_all_actions(state, config)
+        idx = actions.long().view(-1, 1)
+        return ev.gather(1, idx).squeeze(1), x.gather(1, idx).squeeze(1)
+
     def evar_all_actions(self, state: torch.Tensor, config: EVaRConfig):
         """``(evar, x_star)`` per action, each ``(batch, A)``."""
         p = self.probs(state)
@@ -128,3 +140,20 @@ class C51QCritic(C51Critic):
         idx = actions.long().view(-1, 1, 1).expand(-1, 1, self.n_atoms)
         taken = log_p.gather(1, idx).squeeze(1)                          # (B, N)
         return -(target_probs * taken).sum(dim=-1).mean()
+
+    def regression_loss(self, states, actions, targets):
+        """Fit Z(s,a) to observed scalar returns -- see the continuous version."""
+        t = targets.clamp(self.v_min, self.v_max)
+        b = (t - self.v_min) / self.delta_z
+        lo = b.floor().long().clamp(0, self.n_atoms - 1)
+        hi = b.ceil().long().clamp(0, self.n_atoms - 1)
+        eq = lo == hi
+        lo = torch.where(eq & (lo > 0), lo - 1, lo)
+        hi = torch.where(eq & (hi < self.n_atoms - 1), hi + 1, hi)
+        target = torch.zeros(t.shape[0], self.n_atoms, device=t.device)
+        target.scatter_add_(1, lo.unsqueeze(1), (hi.float() - b).unsqueeze(1))
+        target.scatter_add_(1, hi.unsqueeze(1), (b - lo.float()).unsqueeze(1))
+        log_p = F.log_softmax(self.logits(states), dim=-1)
+        idx = actions.long().view(-1, 1, 1).expand(-1, 1, self.n_atoms)
+        taken = log_p.gather(1, idx).squeeze(1)
+        return -(target * taken).sum(-1).mean()

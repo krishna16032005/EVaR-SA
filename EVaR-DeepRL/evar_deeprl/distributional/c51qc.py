@@ -113,3 +113,24 @@ class C51QContinuousCritic(C51Critic):
             target_probs = self.project_target(rewards, next_probs, dones, gamma)
         log_p = F.log_softmax(self.logits(states, actions), dim=-1)
         return -(target_probs * log_p).sum(dim=-1).mean()
+
+    def regression_loss(self, states, actions, targets):
+        """Fit Z(s,a) to observed scalar returns by categorical projection.
+
+        The target is a point mass at the realised return-to-go, projected onto the
+        support and matched with cross-entropy. A single sample is a point, but the
+        head is shared across a batch of them, so what it learns is the return
+        *distribution* conditioned on (s,a) -- which is the object EVaR is taken of.
+        """
+        t = targets.clamp(self.v_min, self.v_max)
+        b = (t - self.v_min) / self.delta_z
+        lo = b.floor().long().clamp(0, self.n_atoms - 1)
+        hi = b.ceil().long().clamp(0, self.n_atoms - 1)
+        eq = lo == hi
+        lo = torch.where(eq & (lo > 0), lo - 1, lo)
+        hi = torch.where(eq & (hi < self.n_atoms - 1), hi + 1, hi)
+        target = torch.zeros(t.shape[0], self.n_atoms, device=t.device)
+        target.scatter_add_(1, lo.unsqueeze(1), (hi.float() - b).unsqueeze(1))
+        target.scatter_add_(1, hi.unsqueeze(1), (b - lo.float()).unsqueeze(1))
+        log_p = F.log_softmax(self.logits(states, actions), dim=-1)
+        return -(target * log_p).sum(-1).mean()

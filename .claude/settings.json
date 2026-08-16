@@ -91,7 +91,14 @@
       "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/analyze_lam.py evar-box:/tmp/)",
       "Bash(ssh -o ConnectTimeout=20 evar-box 'grep -c finished /tmp/canlearn.log 2>/dev/null || echo \"still running\"; pgrep -fc run_safety.py; tail -1 /tmp/canlearn_0.log')",
       "Bash(scp -q /tmp/canlearn_an.py evar-box:/tmp/)",
-      "Bash(git commit -q -m 'Record the learner as the binding constraint on continuous control *)"
+      "Bash(git commit -q -m 'Record the learner as the binding constraint on continuous control *)",
+      "WebSearch",
+      "Bash(scp -q /tmp/vec_probe.py evar-box:/tmp/)",
+      "Bash(python3 -c \"import ast;[ast.parse\\(open\\(f\\).read\\(\\)\\) for f in \\('evar_deeprl/distributional/c51qc.py','evar_deeprl/distributional/c51q.py','evar_deeprl/agents/ppo_evar.py'\\)];print\\('all parse'\\)\")",
+      "Bash(scp -q evar_deeprl/agents/ppo_evar.py evar-box:/tmp/patch/)",
+      "Bash(scp -q evar_deeprl/distributional/c51q.py evar_deeprl/distributional/c51qc.py evar-box:/tmp/patch/dist/)",
+      "Bash(scp -q experiments/run_ppo.py evar-box:/tmp/patch/)",
+      "Bash(scp -q evar_deeprl/distributional/c51q.py evar_deeprl/agents/ppo_evar.py evar-box:/tmp/patch/)"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af"
