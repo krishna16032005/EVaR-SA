@@ -192,6 +192,40 @@ def baseline_value(critic, obs, actor, cfg):
         return total / cfg.baseline_samples
 
 
+def return_panel(returns: np.ndarray, alphas=(0.05, 0.1, 0.3)) -> dict:
+    """The same statistics for every method, whatever it optimised.
+
+    Scoring a risk-seeking method on mean return grades it on the thing it is
+    entitled to sacrifice, and scoring each method on its own objective compares
+    numbers that are not on the same scale. Both are avoided by reporting one
+    common panel: the mean, the upper tail, and EVaR/CVaR at fixed alphas -- so
+    `mean` is expected to win the mean column and `evar` is expected to win the
+    tail columns. If it does not win the tail columns, that is the real failure.
+    """
+    if returns.size == 0:
+        return {}
+    r = np.sort(returns)
+    out = {
+        "eval_return_mean": float(r.mean()),
+        "eval_return_std": float(r.std()),
+        "eval_return_p10": float(np.percentile(r, 10)),
+        "eval_return_p50": float(np.percentile(r, 50)),
+        "eval_return_p90": float(np.percentile(r, 90)),
+        "eval_return_max": float(r.max()),
+        "eval_top_decile_mean": float(r[-max(1, r.size // 10):].mean()),
+    }
+    sup = torch.as_tensor(r, dtype=torch.float32)
+    prob = torch.full((1, r.size), 1.0 / r.size)
+    for a in alphas:
+        k = max(1, int(np.ceil(a * r.size)))
+        out[f"eval_cvar_upper_{a:g}"] = float(r[-k:].mean())
+        cfg_a = RiskConfig("evar", alpha=a,
+                           evar_cfg=EVaRConfig(alpha=a, x_min=1e-3,
+                                               x_max=max(2.0 * float(r.max() - r.min()), 1.0)))
+        out[f"eval_evar_{a:g}"] = float(apply_risk(sup, prob, cfg_a).item())
+    return out
+
+
 def train_ppo(env, actor, critic, cfg: PPOConfig, device, run_config_extra=None):
     """Vectorized PPO with a distributional action-value critic."""
     if cfg.torch_threads:
@@ -363,6 +397,7 @@ def train_ppo(env, actor, critic, cfg: PPOConfig, device, run_config_extra=None)
         update += 1
         recent = finished_returns[-50:]
         rec_cost = finished_costs[-50:]
+        panel = return_panel(np.asarray(finished_returns[-400:], dtype=np.float64))
         with torch.no_grad():
             pred = mean_of(critic, flat_obs, flat_env_act).cpu().numpy()
         record = {
@@ -384,6 +419,7 @@ def train_ppo(env, actor, critic, cfg: PPOConfig, device, run_config_extra=None)
             "actor_grad_norm": float(a_gn),
             "critic_grad_norm": float(c_gn),
             "steps_per_sec": global_step / max(time.time() - start, 1e-8),
+            **panel,
         }
         logger.log_update(record)
         if update % cfg.log_every == 0:

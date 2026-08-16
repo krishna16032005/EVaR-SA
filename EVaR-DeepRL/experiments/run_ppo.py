@@ -40,6 +40,11 @@ from evar_deeprl.utils import new_run_tag, resolve_device, save_records
 
 def make_vector_env(env_id: str, n_envs: int, max_steps: int | None):
     """Vector env for whichever package owns this id."""
+    if env_id == "LotteryGridWorld":
+        import gymnasium as gym
+        from evar_deeprl.envs.lottery_gridworld import LotteryGridWorld
+        return gym.vector.SyncVectorEnv(
+            [(lambda i=i: LotteryGridWorld(seed=1000 + i)) for i in range(n_envs)]), False
     if env_id.startswith("Safety"):
         import safety_gymnasium
         kwargs = {} if max_steps is None else {"max_episode_steps": max_steps}
@@ -56,7 +61,11 @@ def support_for(env_id: str, gamma: float, cost_penalty: float) -> tuple[float, 
     undiscounted episode return -- the same units error that once left 9 of 51 atoms
     carrying any mass on CartPole.
     """
-    horizon = 1.0 / (1.0 - gamma)
+    # gamma = 1 is legitimate for short episodic tasks (the gridworld is 3 steps and
+    # its objective is the undiscounted trajectory return), so guard the horizon.
+    horizon = 1.0 / max(1.0 - gamma, 1e-3)
+    if env_id == "LotteryGridWorld":
+        return -5.0, 285.0            # 3 segments, max 45+45+180 = 270
     if env_id.startswith("CartPole"):
         return -0.05 * horizon, 1.05 * horizon
     if env_id.startswith("Safety"):

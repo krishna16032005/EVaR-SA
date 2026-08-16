@@ -129,7 +129,12 @@ DEFAULT_SEGMENTS = (
 class LotteryGridWorld:
     """Gymnasium-style 5-tuple env over a 2 x (n_segments+1) grid."""
 
+    metadata = {"render_modes": []}
+    render_mode = None          # gymnasium's vector wrappers read this attribute
+    spec = None
+
     def __init__(self, segments=DEFAULT_SEGMENTS, seed: int | None = None):
+        import gymnasium as gym
         self.segments = tuple(segments)
         for i, s in enumerate(self.segments):
             s.validate(i)
@@ -140,6 +145,12 @@ class LotteryGridWorld:
         self._rng = np.random.default_rng(seed)
         self.row = 0
         self.col = 0
+        # Gymnasium spaces so the vectorized PPO learner can run on this too. The
+        # analytic optimum is known here for every alpha, which makes it the only
+        # place a risk measure can be scored against ground truth rather than
+        # against another method's curve.
+        self.observation_space = gym.spaces.Box(0.0, 1.0, (self.n_states,), np.float32)
+        self.action_space = gym.spaces.Discrete(self.n_actions)
 
     # -- state helpers -----------------------------------------------------
     def index(self, row: int, col: int) -> int:
