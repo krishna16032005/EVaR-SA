@@ -119,7 +119,9 @@
       "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/lg_table.py evar-box:/tmp/lg_table2.py)",
       "Bash(ssh -o ConnectTimeout=15 evar-box 'grep -c finished /tmp/lg_bench.log 2>/dev/null; pgrep -fc run_ppo.py')",
       "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/sg_table.py evar-box:/tmp/)",
-      "Bash(scp -q /tmp/sg_table2.py evar-box:/tmp/)"
+      "Bash(scp -q /tmp/sg_table2.py evar-box:/tmp/)",
+      "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/report_full.py evar-box:/tmp/)",
+      "Bash(git commit -q -m 'Write down the contribution, the papers to reproduce, and the environments *)"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af"
