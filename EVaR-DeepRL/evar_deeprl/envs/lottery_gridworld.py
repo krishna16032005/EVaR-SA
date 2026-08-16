@@ -159,9 +159,12 @@ class LotteryGridWorld:
     render_mode = None          # gymnasium's vector wrappers read this attribute
     spec = None
 
-    def __init__(self, segments=DEFAULT_SEGMENTS, seed: int | None = None):
+    def __init__(self, segments=DEFAULT_SEGMENTS, seed: int | None = None,
+                 path_segments=None):
         import gymnasium as gym
         self.segments = tuple(segments)
+        # optional {(row, col): Segment} making the payoff path-dependent
+        self.path_segments = path_segments
         for i, s in enumerate(self.segments):
             s.validate(i)
         self.n_segments = len(self.segments)
@@ -197,10 +200,23 @@ class LotteryGridWorld:
         self.row, self.col = 0, 0
         return self._obs(), {}
 
+    def segment_at(self, row: int, col: int):
+        """The lottery faced at (row, col).
+
+        With ``path_segments`` set, the segment depends on the lane arrived in, so
+        the trajectory return is no longer a sum of *independent* per-column
+        lotteries. That matters: independence is exactly what makes the EVaR
+        objective decouple at one global x*, and hence what makes a per-state proxy
+        exact. Dependent segments are the case where the proxy should fail.
+        """
+        if self.path_segments is not None:
+            return self.path_segments[(row, col)]
+        return self.segments[col]
+
     def step(self, action: int):
         if self.col >= self.n_segments:
             raise RuntimeError("step() called on a terminal state")
-        seg = self.segments[self.col]
+        seg = self.segment_at(self.row, self.col)
         action = int(action)
         if action == 0:
             reward = seg.safe
@@ -236,7 +252,7 @@ def return_distribution(env: LotteryGridWorld, policy, start=(0, 0)
         if col >= env.n_segments:
             acc[total] = acc.get(total, 0.0) + prob
             return
-        seg = env.segments[col]
+        seg = env.segment_at(row, col)
         p_safe, p_risky = policy(row, col)
         if p_safe > 0:
             walk(0, col + 1, total + seg.safe, prob * p_safe)

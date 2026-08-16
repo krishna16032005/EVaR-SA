@@ -128,7 +128,9 @@
       "Bash(python3 -c \"import ast;[ast.parse\\(open\\(f\\).read\\(\\)\\) for f in \\('evar_deeprl/envs/lottery_gridworld.py','experiments/run_ppo.py'\\)];print\\('parse ok'\\)\")",
       "Bash(git commit -q -m 'Add a gridworld configuration where the risk measures actually disagree *)",
       "Bash(ssh -o ConnectTimeout=15 evar-box 'grep -q \"^finished\" /tmp/disc.log 2>/dev/null')",
-      "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/disc_table.py evar-box:/tmp/)"
+      "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/disc_table.py evar-box:/tmp/)",
+      "Bash(scp -q evar_deeprl/envs/lottery_gridworld.py analysis/path_dependent_test.py evar-box:/tmp/patch/)",
+      "Bash(scp -q analysis/c3_attribution.py analysis/path_dependent_test.py evar-box:/tmp/patch/)"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af"

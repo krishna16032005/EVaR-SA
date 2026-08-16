@@ -73,7 +73,7 @@ def greedy_improve(env, table, alpha):
     new = {}
     for col in range(env.n_segments):
         for row in (0, 1):
-            seg = env.segments[col]
+            seg = env.segment_at(row, col)
             q_safe = seg.safe + V[(0, col + 1)]
             q_risky = seg.risky_mean + V[(1, col + 1)]
             new[(row, col)] = 0 if q_safe >= q_risky else 1
@@ -91,7 +91,7 @@ def action_value_dist(env, table, row, col, action):
     """
     pol = table_policy(table)
     tail_v, tail_p = return_distribution(env, pol, start=(action, col + 1))
-    seg = env.segments[col]
+    seg = env.segment_at(row, col)
     if action == 0:
         rv, rp = np.array([seg.safe]), np.array([1.0])
     else:
