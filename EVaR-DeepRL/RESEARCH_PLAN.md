@@ -275,11 +275,24 @@ Now, in order:
    only, so `run_invpend.py` and `run_safety.py` still carry the state-value critic
    and therefore the C3 defect. Everything queued for Safety-Gymnasium is currently
    built on the broken form. This blocks the whole continuous-control ladder.
-6. **Vectorized envs**, for the on-policy correlation problem -- a stability fix,
-   not a speedup. Note the gridworld work reframes how much of the CartPole
-   instability was ever the optimizer: the binding constraint there may have been
-   the same 0.72-against-noise signal ratio.
-7. **Safety-Gymnasium**: calibrate `lambda` first, then the alpha sweep.
+6. **A learner that can do continuous control.** This is now the binding
+   constraint on everything continuous, not one improvement among several.
+   Measured on `SafetyPointGoal1-v0` at `lambda = 0` -- cost priced at zero, so
+   pure navigation with no risk machinery involved -- reward converges to
+   random-policy level over 1500 episodes and stays: `c51qc` at -0.11 and -0.15,
+   `c51` at -0.19 with one seed diverging to -11.68, against a random-policy probe
+   of +0.05 to -0.10. The environment and the operator are fine; there is no
+   policy. Needed: a proper on-policy update (GAE, clipped objective, several
+   epochs per batch) and vectorized envs, which also fixes the correlated-batch
+   problem. These benchmarks are normally run at 1e6-1e7 steps with PPO/SAC-class
+   algorithms; this is n-step A2C at 800k-1.5M.
+7. ~~**Safety-Gymnasium**: calibrate `lambda`.~~ Attempted, and it is blocked on
+   (6) rather than on anything about the environment. Worth recording that
+   Safety-Gymnasium *does* supply what CartPole could not: cost is non-zero
+   (249-704 episodes per run) and the priced return has genuine spread (sd 8.6 to
+   45.0). But `lambda` cannot be calibrated against a random walk -- cost rose with
+   `lambda` (Goal2: 66.9 -> 92.2 -> 102.1 at 0.1/0.25/0.5) where a policy
+   responding to a price would do the opposite. Redo once (6) lands.
 8. **SPSA head-to-head** on gridworld at a matched sample budget -> C2.
 9. `--risk-objective` switch, then baselines 3 and 4.
 10. Phase 3 MuJoCo with a stochastic variant; Swimmer / HalfCheetah at scale.
