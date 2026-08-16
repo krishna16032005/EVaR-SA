@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -77,6 +78,29 @@ def smooth(y, window):
                        np.ones(window) / window, mode="valid")[: y.size]
 
 
+SEED_RE = re.compile(r"-s(\d+)-")
+
+
+def run_seed(run):
+    """Seed of a run, from config if present and from the run name otherwise.
+
+    Runs launched before the seed was added to the wandb config carry no `seed`
+    key, and defaulting them all to 0 makes seeds of the same arm overwrite each
+    other -- the paired table then silently reports whichever run was read last.
+    The launcher puts `-s<N>-` in every run name, so that is a reliable fallback;
+    raising here beats guessing, because a wrong seed corrupts the pairing rather
+    than merely mislabelling a row.
+    """
+    if "seed" in run.config:
+        return int(run.config["seed"])
+    m = SEED_RE.search(run.name or "")
+    if m:
+        return int(m.group(1))
+    raise ValueError(
+        f"run {run.name!r} has no `seed` in its config and no -s<N>- in its name; "
+        f"cannot pair it against a control without knowing the seed")
+
+
 def fetch(entity, project, groups):
     """Pull DSAC runs -> {(group, arm): {seed: (x, {metric: y})}}."""
     import wandb
@@ -100,7 +124,7 @@ def fetch(entity, project, groups):
             if np.isfinite(v).any():
                 series[key] = v
         arm = run.config.get("risk", "?")
-        seed = run.config.get("seed", 0)
+        seed = run_seed(run)
         out[(g, arm)][seed] = (x, series, run.name, run.state)
     return out
 

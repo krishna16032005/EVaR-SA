@@ -137,7 +137,15 @@
       "Bash(scp -q evar_deeprl/policies/squashed_gaussian.py evar-box:/tmp/patch/pol/)",
       "Bash(scp -q evar_deeprl/agents/dsac_evar.py experiments/run_dsac.py evar-box:/tmp/patch/)",
       "Bash(python3 -c \"import ast;ast.parse\\(open\\('evar_deeprl/distributional/iqn_q.py'\\).read\\(\\)\\);print\\('parses'\\)\")",
-      "Bash(ssh evar-box 'cd ~/EVaR-SA/EVaR-DeepRL && cp /tmp/patch/dist/iqn_q.py evar_deeprl/distributional/ && python -c \" *)"
+      "Bash(ssh evar-box 'cd ~/EVaR-SA/EVaR-DeepRL && cp /tmp/patch/dist/iqn_q.py evar_deeprl/distributional/ && python -c \" *)",
+      "Bash(ssh -o ConnectTimeout=20 evar-box 'grep -c finished /tmp/dsac_val.log 2>/dev/null; for f in /tmp/dv_mean_0 /tmp/dv_evar_0; do echo \"=== $\\(basename $f\\) ===\"; grep \"^\\\\[dsac\\\\]\" ${f}.log 2>/dev/null | tail -2; done')",
+      "Bash(ssh -o ConnectTimeout=15 evar-box 'echo \"== sweep ==\"; cat /tmp/dsac_val.log 2>/dev/null | tail -5; echo; echo \"== per-run tails ==\"; for f in /tmp/dv_*.log; do echo \"--- $f\"; tail -3 \"$f\"; done; echo; echo \"== running ==\"; pgrep -af \"run_dsac\" | head')",
+      "Bash(git commit -q -m ' *)",
+      "Bash(rsync -az --exclude '.git' --exclude 'results' --exclude '__pycache__' ./ evar-box:~/EVaR-SA/EVaR-DeepRL/)",
+      "Bash(python -c \"import wandb; print\\('wandb', wandb.__version__\\)\")",
+      "Bash(python -c \"import wandb_workspaces; print\\('wandb_workspaces ok'\\)\")",
+      "Read(//Users/deepganguly98/**)",
+      "Bash(ssh evar-box 'python -c \"import wandb;print\\(\\\\\"wandb\\\\\",wandb.__version__\\)\"; python -c \"import wandb_workspaces;print\\(\\\\\"wandb_workspaces available\\\\\"\\)\" 2>&1|tail -1; python -c \" *)"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af"

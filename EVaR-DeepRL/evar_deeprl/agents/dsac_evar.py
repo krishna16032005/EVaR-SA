@@ -142,9 +142,21 @@ def train_dsac(env, cfg: DSACConfig, device, run_config_extra=None):
     e_opt = torch.optim.Adam([log_ent], lr=cfg.alpha_lr)
 
     buf = Replay(cfg.buffer_size, obs_dim, act_dim, device)
+    # `seed` in particular is not optional. Without it every run of a group reports
+    # the same default, seeds collide when results are keyed by (arm, seed), and the
+    # paired comparison against the risk-neutral control silently reduces to
+    # whichever run was read last. The rest is what a reader of the report needs to
+    # tell two runs apart without opening the launch script.
     logger = RunLogger(cfg.wandb, run_config={**(run_config_extra or {}),
                                               "algo": "dsac-evar",
                                               "risk": cfg.risk.label(),
+                                              "risk_kind": cfg.risk.kind,
+                                              "alpha": cfg.risk.alpha,
+                                              "seed": cfg.seed,
+                                              "total_steps": cfg.total_steps,
+                                              "batch_size": cfg.batch_size,
+                                              "gamma": cfg.gamma,
+                                              "n_quantiles_risk": cfg.n_quantiles_risk,
                                               "x_smoothing": cfg.x_smoothing,
                                               "cost_penalty": cfg.cost_penalty})
 
