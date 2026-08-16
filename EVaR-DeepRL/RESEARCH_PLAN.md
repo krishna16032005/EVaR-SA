@@ -247,12 +247,18 @@ Next, in expected-payoff order:
 | arm | seed 0 | seed 1 |
 |---|---|---|
 | `mean` | -96.99 | -152.44 |
-| `evar` alpha=0.1 | -96.36 | -113.53 |
+| `evar` alpha=0.1 | -96.36 | -151.92 |
 
 Random policy is ~-1200, so both solve the task; the n-step A2C never left random
 on anything continuous. **EVaR tying the risk-neutral control here is the correct
 result, not a null one**: Pendulum's return spread is almost entirely policy noise,
-so there is no tail to seek and `alpha` should not matter. It is the same reasoning
+so there is no tail to seek and `alpha` should not matter.
+
+Read the table by seed rather than by arm, because that is where the signal is.
+Seed variance is 55 return points; the mean-vs-EVaR gap *within* a seed is 0.6 and
+0.5. The two arms are not merely close on average, they track each other run for
+run -- which is what a correctly wired risk operator does on a distribution with no
+tail to exploit, and is much harder to get by accident than a matching average. It is the same reasoning
 that retired CartPole, and it is why this run is plumbing validation rather than
 evidence. `x*` settles at 0.37-0.41 instead of pinning to a bound, which is the
 diagnostic that the dual solve is live.
