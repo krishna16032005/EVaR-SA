@@ -130,7 +130,10 @@
       "Bash(ssh -o ConnectTimeout=15 evar-box 'grep -q \"^finished\" /tmp/disc.log 2>/dev/null')",
       "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/disc_table.py evar-box:/tmp/)",
       "Bash(scp -q evar_deeprl/envs/lottery_gridworld.py analysis/path_dependent_test.py evar-box:/tmp/patch/)",
-      "Bash(scp -q analysis/c3_attribution.py analysis/path_dependent_test.py evar-box:/tmp/patch/)"
+      "Bash(scp -q analysis/c3_attribution.py analysis/path_dependent_test.py evar-box:/tmp/patch/)",
+      "Bash(scp -q evar_deeprl/distributional/iqn_q.py evar-box:/tmp/patch/dist/)",
+      "Bash(scp -q /private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af/scratchpad/test_iqnq.py evar-box:/tmp/)",
+      "Bash(git commit -q -m 'Add the IQN action-value critic with a robust EVaR solve *)"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af"
