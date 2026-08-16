@@ -55,6 +55,18 @@ PANELS = [
      "Auto-tuned entropy coefficient", "dsac_entropy", 5),
 ]
 
+# Shape of the distribution the risk measure is applied to. Reported separately
+# because these decide whether an experiment can say anything at all: if the
+# critic's return distribution has no spread, every risk attitude ties and the
+# comparison is uninformative regardless of how the learner performs.
+DIAG_KEYS = [
+    ("update/z_sd_mean", "sd(Z)"),
+    ("update/z_range_mean", "range(Z)"),
+    ("update/top_mass_frac", "mass within 0.05sd of max"),
+    ("update/at_bound_frac", "dual solve at a bound"),
+    ("update/x_star_mean", "x* = 1/beta*"),
+]
+
 
 def style(ax, title, xlabel, ylabel):
     ax.set_facecolor(SURFACE)
@@ -223,7 +235,35 @@ def paired_gaps(rows):
     return out
 
 
-def publish(entity, project, rows, gaps, groups, title):
+def diagnostics_table(entity, project, group):
+    """Distribution-shape metrics over training, for one group.
+
+    Returns a markdown table, or None when the group logged none of them -- runs
+    predating the diagnostics, or `--risk mean` arms which never call the solver.
+    """
+    import wandb
+    api = wandb.Api()
+    path = f"{entity}/{project}" if entity else project
+    runs = [r for r in api.runs(path) if (r.group or "") == group]
+    if not runs:
+        return None
+    keys = ["update/global_step", "update/return_mean"] + [k for k, _ in DIAG_KEYS]
+    hist = runs[0].history(keys=keys, pandas=False, samples=1000)
+    hist = [h for h in hist if h.get("update/z_sd_mean") is not None]
+    if not hist:
+        return None
+    head = ("| step | return | " + " | ".join(lbl for _, lbl in DIAG_KEYS) + " |\n"
+            "|---:|---:|" + "---:|" * len(DIAG_KEYS) + "\n")
+    body = ""
+    for h in hist:
+        body += (f"| {h.get('update/global_step', 0):,} "
+                 f"| {h.get('update/return_mean', float('nan')):.2f} | "
+                 + " | ".join(f"{h.get(k, float('nan')):.4f}" for k, _ in DIAG_KEYS)
+                 + " |\n")
+    return head + body
+
+
+def publish(entity, project, rows, gaps, groups, title, diag=None, diag_group=None):
     """Create a W&B Report with the panels and the paired table."""
     import wandb_workspaces.reports.v2 as wr
 
@@ -258,6 +298,28 @@ def publish(entity, project, rows, gaps, groups, title):
             text=("### Paired against the risk-neutral control\n\n"
                   "Positive gap = the risk arm ended higher than its own seed's "
                   "control.\n\n" + gh + gb)))
+
+    if diag:
+        blocks.append(wr.MarkdownBlock(text=(
+            f"### Can this environment support the claim? (`{diag_group}`)\n\n"
+            "Before comparing risk measures, check that there is risk to measure. "
+            "These are the shape of the critic's return distribution `Z(s,a)` -- the "
+            "thing the risk functional is applied to -- taken during training.\n\n"
+            "Two of them are correctness checks. **`dual solve at a bound`** must be "
+            "0: a solve that lands on its interval is not a solve, and EVaR silently "
+            "degenerates into fixed-beta entropic utility, which is the baseline it "
+            "exists to beat. **`mass within 0.05sd of max`** near `1/K` (0.0156 at "
+            "K=64) means the distribution is spread rather than piled at its maximum, "
+            "so EVaR is a tail average and not just the maximum.\n\n"
+            "The third is the one that decides the experiment. **`sd(Z)` against the "
+            "episode return** says how much spread the risk measure has to work "
+            "with. Below, sd(Z) sits near 0.022 while episode return reaches ~10 -- "
+            "under 1%. The per-state return distribution is nearly deterministic, so "
+            "every risk attitude has almost nothing to trade and ties are the "
+            "expected outcome. That is a property of the environment, not of the "
+            "method, and it is the standard trap in risk-sensitive RL benchmarking: "
+            "on a near-deterministic task any 'risk-seeking wins' claim is "
+            "unfalsifiable.\n\n" + diag)))
 
     blocks.append(wr.MarkdownBlock(text=(
         "### How to read a tie\n\n"
@@ -299,6 +361,8 @@ def main():
     p.add_argument("--title", default="Risk-sensitive DSAC: EVaR vs a matched control")
     p.add_argument("--no-publish", action="store_true",
                    help="write figures only; do not create the W&B report")
+    p.add_argument("--diag-group", default=None,
+                   help="group whose distribution-shape diagnostics to tabulate")
     args = p.parse_args()
 
     data = fetch(args.entity, args.project, args.groups)
@@ -330,7 +394,12 @@ def main():
         if entity is None:
             import wandb
             entity = wandb.Api().default_entity
-        url = publish(entity, args.project, rows, gaps, groups, args.title)
+        diag = (diagnostics_table(entity, args.project, args.diag_group)
+                if args.diag_group else None)
+        if args.diag_group and diag is None:
+            print(f"  (no distribution diagnostics logged in {args.diag_group})")
+        url = publish(entity, args.project, rows, gaps, groups, args.title,
+                      diag=diag, diag_group=args.diag_group)
         print(f"\nReport: {url}")
 
 
