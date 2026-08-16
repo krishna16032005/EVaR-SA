@@ -149,6 +149,16 @@ class CostPricedEnv:
         info["episode_reward_raw"] = self.episode_reward_raw
         return obs, float(reward) - self.cost_penalty * float(cost), terminated, truncated, info
 
+    def episode_info(self) -> dict:
+        """Per-episode extras the trainer merges into its episode record.
+
+        Reported unpriced so a risk-seeking policy can be judged the way the
+        benchmark intends -- return *and* the cost it took on to get it -- rather
+        than only through the lambda-priced scalar it optimises.
+        """
+        return {"episode_cost": self.episode_cost,
+                "episode_reward_raw": self.episode_reward_raw}
+
     def close(self):
         self.env.close()
 

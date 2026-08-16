@@ -513,7 +513,7 @@ def train(
                 action_t, log_prob, entropy = actor.act_with_entropy(state_t.unsqueeze(0))
 
                 env_action = action_to_env(action_t.squeeze(0))
-                next_obs, reward, terminated, truncated, _ = env.step(env_action)
+                next_obs, reward, terminated, truncated, step_info = env.step(env_action)
 
                 buffer.states.append(state_t)
                 buffer.actions.append(action_t.squeeze(0).detach())
@@ -540,6 +540,11 @@ def train(
                 return_window.pop(0)
 
             elapsed = time.time() - train_start
+            # Envs that carry a second signal the trainer does not model -- cost in
+            # Safety-Gymnasium, where a risk-seeking win is only reportable alongside
+            # the cost it incurred -- expose it here rather than through info, which
+            # the rollout discards.
+            extra = env.episode_info() if hasattr(env, "episode_info") else {}
             episode_record = {
                 "episode": episode + 1,
                 "global_step": global_step,
@@ -551,6 +556,7 @@ def train(
                 "last_actor_loss": last_actor_loss,
                 "steps_per_sec": episode_steps / max(time.time() - episode_start, 1e-8),
                 "elapsed_s": elapsed,
+                **extra,
             }
             logger.log_episode(episode_record)
 
