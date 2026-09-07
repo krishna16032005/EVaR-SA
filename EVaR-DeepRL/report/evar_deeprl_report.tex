@@ -250,7 +250,7 @@ only valid at one return scale. Figure~\ref{fig:scale} shows the consequence.
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=\textwidth]{../results/figures/report/solver_scale.pdf}
+\includegraphics[width=\textwidth]{figures/solver_scale.pdf}
 \caption{\textbf{Left:} the solved dual $x^\ast$ tracks $0.34\,\mathrm{sd}(Z)$ over
 five orders of magnitude. With a fixed interval it flattens onto $x_{\min}=10^{-2}$
 as soon as the true optimum falls below it. \textbf{Right:} the resulting relative
@@ -275,7 +275,7 @@ intuition.
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=\textwidth]{../results/figures/report/dual_objective.pdf}
+\includegraphics[width=\textwidth]{figures/dual_objective.pdf}
 \caption{The dual objective $G(x)$ for three distribution shapes with the solved
 optimum marked. Left and centre: an interior minimum, correctly located at very
 different $x$ for the same $\alpha$. Right: with $90\%$ of the mass at the maximum
@@ -288,7 +288,7 @@ saturated regime, which is detected and returned exactly rather than bisected.}
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.66\textwidth]{../results/figures/report/solver_precision.pdf}
+\includegraphics[width=0.66\textwidth]{figures/solver_precision.pdf}
 \caption{Accuracy against a 60-step reference. The shipped budget of 20 bisections
 sits at float32 machine epsilon across return scales; 30 bought nothing measurable
 while costing $\approx 12$ kernel launches each.}
@@ -452,7 +452,7 @@ estimated.
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.86\textwidth]{../results/figures/gridworld/gridworld_environment.pdf}
+\includegraphics[width=0.86\textwidth]{figures/gridworld_environment.pdf}
 \caption{The lottery gridworld. Each risky segment sacrifices a little mean for a
 large upper tail: taking all three lotteries gives up $6\%$ of the mean return for
 $9\times$ the best case. This asymmetry is deliberate --- a risk-seeking method must
@@ -463,7 +463,7 @@ distinguish it from a broken one.}
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=\textwidth]{../results/figures/gridworld/gridworld_c3_mechanism.pdf}
+\includegraphics[width=\textwidth]{figures/gridworld_c3_mechanism.pdf}
 \caption{The C3 mechanism: how the state-value operator's tilt fails to reach the
 sampled reward, and where the per-state dual departs from the global one.}
 \label{fig:c3}
@@ -554,9 +554,9 @@ environment, not a proof that EVaR is redundant.
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.49\textwidth]{../results/figures/dsac/dsac-pendulum_dsac_return.pdf}
+\includegraphics[width=0.49\textwidth]{figures/dsac-pendulum_dsac_return.pdf}
 \hfill
-\includegraphics[width=0.49\textwidth]{../results/figures/dsac/dsac-pendulum_dsac_dual_x.pdf}
+\includegraphics[width=0.49\textwidth]{figures/dsac-pendulum_dsac_dual_x.pdf}
 \caption{Pendulum: return (left) and the solved dual $x^\ast$ (right), EVaR arm
 against the matched risk-neutral control.}
 \label{fig:pend}
@@ -593,9 +593,9 @@ that switching the functional does not destabilise the learner.
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.49\textwidth]{../results/figures/dsac/dsac-safety-nav_dsac_return.pdf}
+\includegraphics[width=0.49\textwidth]{figures/dsac-safety-nav_dsac_return.pdf}
 \hfill
-\includegraphics[width=0.49\textwidth]{../results/figures/dsac/dsac-safety-nav_dsac_cost.pdf}
+\includegraphics[width=0.49\textwidth]{figures/dsac-safety-nav_dsac_cost.pdf}
 \caption{SafetyPointGoal1, 300k steps, cost priced at zero ($\lambda = 0$): return
 (left) and incurred safety cost (right).}
 \label{fig:safety}

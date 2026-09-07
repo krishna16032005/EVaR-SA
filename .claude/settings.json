@@ -145,10 +145,29 @@
       "Bash(python -c \"import wandb; print\\('wandb', wandb.__version__\\)\")",
       "Bash(python -c \"import wandb_workspaces; print\\('wandb_workspaces ok'\\)\")",
       "Read(//Users/deepganguly98/**)",
-      "Bash(ssh evar-box 'python -c \"import wandb;print\\(\\\\\"wandb\\\\\",wandb.__version__\\)\"; python -c \"import wandb_workspaces;print\\(\\\\\"wandb_workspaces available\\\\\"\\)\" 2>&1|tail -1; python -c \" *)"
+      "Bash(ssh evar-box 'python -c \"import wandb;print\\(\\\\\"wandb\\\\\",wandb.__version__\\)\"; python -c \"import wandb_workspaces;print\\(\\\\\"wandb_workspaces available\\\\\"\\)\" 2>&1|tail -1; python -c \" *)",
+      "Bash(ssh -o ConnectTimeout=20 evar-box 'echo OK; for f in /tmp/sg_mean_l0.log /tmp/sg_evar_l0.log /tmp/sg_probe.log; do echo \"--- $\\(basename $f\\)\"; grep -E \"^\\\\[dsac\\\\]\" $f 2>/dev/null | tail -1; grep -q \"Results dir\" $f 2>/dev/null && echo \"  >> FINISHED\"; done; echo; for p in $\\(pgrep -f \"experiments/run_dsac.py\"\\); do echo \"  $p :: $\\(tr \"\\\\0\" \" \" < /proc/$p/cmdline | grep -o -- \"--risk [a-z]*\"\\)\"; done')",
+      "Bash(ssh -o ConnectTimeout=25 -o BatchMode=yes evar-box 'echo CONNECTED')",
+      "Bash(echo \"exit=$?\")",
+      "Bash(ping -c 2 -W 3000 shell.model.in.tum.de)",
+      "Bash(python3 -c \"import matplotlib; print\\('mpl', matplotlib.__version__\\)\")",
+      "Bash(git commit -q -m 'Add operator-level figures for the collaborator report *)",
+      "Bash(rsync -az evar-box:~/EVaR-SA/EVaR-DeepRL/results/figures/ /Users/deepganguly98/Desktop/EVaR-SA/EVaR-DeepRL/results/figures/)",
+      "Bash(rsync -az evar-box:/tmp/rep/ /Users/deepganguly98/Desktop/EVaR-SA/EVaR-DeepRL/results/rep/)",
+      "Bash(ssh evar-box 'cd ~/EVaR-SA/EVaR-DeepRL && python -c \" *)",
+      "Bash(pdflatex -interaction=nonstopmode -halt-on-error evar_deeprl_report.tex)",
+      "Bash(echo \"pass1 exit=$?\")",
+      "Read(//tmp/**)",
+      "Bash(pdflatex -interaction=nonstopmode evar_deeprl_report.tex)",
+      "Bash(echo \"pass2 exit=$?\")",
+      "Bash(pdftoppm -png -r 62 -f 1 -l 4 evar_deeprl_report.pdf pg)",
+      "Bash(pdftoppm -png -r 62 -f 5 -l 8 evar_deeprl_report.pdf pgb)",
+      "Bash(pdftoppm -png -r 62 -f 10 -l 12 evar_deeprl_report.pdf pgc)",
+      "Bash(git check-ignore *)"
     ],
     "additionalDirectories": [
-      "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af"
+      "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af",
+      "/Users/deepganguly98/Desktop/EVaR-SA/EVaR-DeepRL/report"
     ]
   }
 }
