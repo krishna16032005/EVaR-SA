@@ -163,7 +163,9 @@
       "Bash(pdftoppm -png -r 62 -f 1 -l 4 evar_deeprl_report.pdf pg)",
       "Bash(pdftoppm -png -r 62 -f 5 -l 8 evar_deeprl_report.pdf pgb)",
       "Bash(pdftoppm -png -r 62 -f 10 -l 12 evar_deeprl_report.pdf pgc)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(git rm *)",
+      "Bash(git commit -q -m 'Drop the .DS_Store that slipped into the report commit *)"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af",
