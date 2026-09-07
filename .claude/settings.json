@@ -179,7 +179,8 @@
       "Read(//private/tmp/**)",
       "Bash(ls /tmp/c2check* 2>/dev/null)",
       "Bash(rm -f /tmp/c2check*.png)",
-      "Bash(grep -vE \"^\\\\.git$\")"
+      "Bash(grep -vE \"^\\\\.git$\")",
+      "Bash(grep -n \"^#\\\\{2,3\\\\} \" EVaR-DeepRL/RESEARCH_PLAN.md)"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af",
