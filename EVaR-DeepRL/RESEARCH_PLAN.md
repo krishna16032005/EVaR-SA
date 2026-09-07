@@ -134,12 +134,19 @@ the fix.
 
 ## The environment ladder
 
-1. **Gridworld** -- exact EVaR; C3 verification against the exact optimum
-2. **CartPole / Pendulum** -- plumbing only. **Settled: CartPole cannot support C1.**
-3. **Safety-Gymnasium** -- stochastic hazards, real catastrophic events
-4. **InvertedPendulum, InvertedDoublePendulum** -- the paper's envs (phase 3 in the queue)
-5. **Swimmer, HalfCheetah** -- comparable to the paper's published SPSA results
-6. **Deliberately stochastic variants** -- see below
+This section records *what each environment was tried for and what it settled*. For
+what to run next and in what order, see "Where to go from here" below -- that
+supersedes the ordering here.
+
+| # | Environment | Purpose | Verdict |
+|---|---|---|---|
+| 1 | Gridworld (lottery) | exact EVaR; C1 and C3 against the true optimum | **works**, the reference testbed |
+| 2 | CartPole | C1 | **structurally null** -- see below |
+| 3 | Pendulum | plumbing for continuous control | **works as plumbing**; no return spread, so ties are expected |
+| 4 | Safety-Gymnasium (`lambda = 0`) | stochastic hazards, catastrophic events | learner **works**; environment **cannot discriminate** at `lambda = 0` (sd(Z) under 1% of return scale) |
+| 5 | InvertedPendulum / Double | the source paper's environments | not re-run; superseded by the Safe Velocity suite for comparability |
+| 6 | Swimmer, HalfCheetah | comparable to the paper's published SPSA numbers | pending, and only worth running with the stochastic variants |
+| 7 | Deliberately stochastic variants | escape the stochasticity trap | **not yet built** -- now a priority, see below |
 
 **Why CartPole is finished as evidence.** Three compounding reasons, and the third
 is fatal on its own:
@@ -347,62 +354,158 @@ handed; the experiment has to be one where that adaptivity is load-bearing --
 which means a return distribution whose shape *changes during training*, since a
 fixed distortion is tuned once and cannot follow it.
 
+## Where to go from here
+
+Written after the DSAC learner landed and the two reports were compiled. The short
+version: **the method is finished as an engineering problem and unstarted as an
+empirical one.** Everything below is about producing a comparison that means
+something.
+
+### Step 0: the screening test, before any full run
+
+The single most useful thing learned from SafetyPointGoal1 is that an environment
+can look ideal and be structurally incapable of supporting the claim. Cost is
+non-zero, hazards are stochastic, episode returns reach ~27 -- and the critic's
+per-state return distribution still has `sd(Z) ~ 0.022`, **under 1% of the return
+scale**. With no spread there is no tail, and every risk attitude ties by
+construction.
+
+That is now a cheap, mechanical pre-check rather than a discovery:
+
+```
+python experiments/run_dsac.py --env <ENV> --risk evar --alpha 0.1 \
+    --total-steps 40000 --log-every 5     # then read update/z_sd_mean
+```
+
+| Reading | Meaning | Action |
+|---|---|---|
+| `at_bound_frac > 0` | dual solve pinned; EVaR is degenerate | fix before interpreting anything |
+| `top_mass_frac >> 1/K` | critic distribution piled at its maximum | EVaR is reporting `max(Z)`, not a tail |
+| `z_sd_mean / |return| < ~5%` | no spread to trade | **do not run the alpha sweep** |
+| `z_sd_mean / |return| > ~10%` | usable tail | proceed |
+
+**Run this on every candidate environment before spending GPU time on it.** It costs
+about 10 minutes and it is the difference between a null result and a wasted week.
+
+### The asymmetry that decides which benchmarks are worth using
+
+This deserves stating plainly because it cuts against the obvious choices, and it is
+the main reason the safe-RL suites have not delivered.
+
+**Almost all risk-sensitive and safe-RL benchmarks are built for risk *aversion*.**
+Safety-Gymnasium, GUARD, WCSAC, the CMDP literature generally: they add *downside*
+hazards and ask the agent to avoid them. Constraint satisfaction is the goal, and
+the interesting tail is the bad one.
+
+This method is risk-*seeking*. It needs an **upside** worth chasing -- a return
+distribution with a good tail that a risk-neutral agent leaves on the table. A
+hazard field supplies variance in the wrong direction: avoiding it is simply
+correct, and no `alpha` makes recklessness pay.
+
+So the environment must have one of these properties:
+
+1. **A genuine bimodal payoff.** A risky branch that beats the safe one *when it
+   works*. Pricing cost (`r_eff = r - lambda*c`) manufactures exactly this in
+   Safety-Gymnasium: the short route past the hazards pays well when it gets away
+   with it, the detour is safe and mediocre. This is why `lambda > 0` moved from
+   optional refinement to the critical path.
+2. **Exogenous stochasticity the agent cannot remove.** Opponents, randomized
+   dynamics, heavy-tailed rewards. If the only randomness is the agent's own
+   exploration noise, `sd(Z)` collapses as the policy converges -- which is exactly
+   what the probe table shows happening.
+3. **A distribution whose shape changes during training.** This is where an
+   *adaptive* tilt should beat a fixed distortion, and therefore where the
+   contribution lives. A fixed CVaR or Wang parameter is chosen once; EVaR re-solves
+   its dual against whatever distribution it is handed.
+
+Property 3 is the one to design for. Properties 1 and 2 are necessary; 3 is what
+makes the result *ours* rather than a tie with CVaR.
+
+### Environment shortlist, in priority order
+
+| # | Environment | Why | Cost | Gate |
+|---|---|---|---|---|
+| 1 | **SafetyPointGoal1/2 with `lambda` swept** | Already running; pricing cost is the cheapest way to manufacture bimodality. Calibrate `lambda` against a *trained* policy -- the earlier attempt failed only because it calibrated against a random walk | ~30 min per `lambda` | Step 0 |
+| 2 | **Stochastic MuJoCo variants** (per-episode randomized mass/friction, heavy-tailed reward perturbation) | Directly attacks the stochasticity trap. The spread is ours to set and, critically, to *report* -- a reviewer checks this first | ~1 h per config | Step 0 |
+| 3 | **GUARD interactive tasks** (Chase, Defense) | The one suite whose tasks are *genuinely* stochastic rather than hazard-static: an opponent supplies exogenous variance that survives policy convergence. 8 agents x 4 tasks x 8 constraints gives a systematic difficulty sweep | integration effort | Step 0 on one instance first |
+| 4 | **Safe Velocity** (Hopper, HalfCheetah, Swimmer, Walker2d, Ant) | What recent risk-sensitive papers report, so it buys direct comparability. Expect a tie unless combined with (2) -- stock MuJoCo is near-deterministic | ~4 h per env, 10 seeds | run *with* (2) |
+| 5 | **Lottery gridworld, discriminating configs** | Already shows 5 of 6 measures selecting distinct optima. The place to demonstrate adaptive-`beta` against fixed distortions where ground truth is exact | minutes | none |
+
+Deliberately **not** prioritised: Atari with distortion measures (risk-averse
+framing, and the return distributions are dominated by score scale), and offline
+suites (D4RL/ORAAC/CODAC) -- a different problem setting that would need its own
+algorithm.
+
+### SOTA baselines, and what each one isolates
+
+Every baseline must share the critic, actor, data and seeds, and be run against the
+`--risk mean` control. A comparison that does not hold those fixed cannot attribute
+a difference to the risk measure.
+
+| Baseline | Isolates | Status |
+|---|---|---|
+| `--risk mean` | the risk measure vs the algorithm | **done**, built in |
+| Fixed-`beta` entropic utility | **whether the dual solve earns its cost.** EVaR *is* `beta`-optimised entropic risk, so this is the most important single baseline and the one a reviewer will demand | implemented, not yet run head-to-head |
+| IQN + distortion (CVaR, Wang, CPW) | the standard risk-sensitive distributional comparison | implemented, needs the sweep |
+| CVaR-AC | an actor-critic built around a different coherent measure; harness at `../../legacy/` | to port |
+| DSAC proper | our learner against its published form, to show the risk machinery costs nothing | to run |
+| WCSAC | the safety-constrained framing, for the Safety-Gym audience | to implement |
+
+Note on GUARD: its own baselines (TRPO, CPO, PCPO, TRPO-Lagrangian/FAC/IPO/SL/USL)
+are **constraint-based and on-policy**, not risk-measure-based. GUARD is valuable to
+us as an *environment suite*, not as a source of directly comparable numbers. Do not
+promise a GUARD baseline table; promise GUARD environments.
+
+### The contribution, stated as an experiment
+
+Adaptive `beta` is the claim. It needs an experiment that a fixed distortion cannot
+pass, and the scale-adaptive interval already found this session is the first
+concrete instance: `x* = 1/beta*` has units of return, so the tilt strength *must*
+track the distribution or EVaR silently degenerates into fixed-`beta` entropic
+utility (measured error up to 1100%).
+
+The experiment that follows from that:
+
+> Take an environment whose return distribution **changes scale or shape during
+> training** -- which is the normal case, since returns grow as the policy improves.
+> A fixed-`beta` entropic utility is tuned once and is therefore mis-scaled for most
+> of training. EVaR re-solves `beta` every update. Measure both, report `x*` over
+> training alongside return, and show the fixed-`beta` arm degrading exactly where
+> the return scale moves away from its tuning point.
+
+This is falsifiable, it is cheap, and it uses machinery that already exists and is
+already instrumented. **If it works, it is the paper.** If EVaR ties fixed-`beta`
+here too, that is a decisive negative result and worth knowing early.
+
+### Ordered sequence, with gates
+
+1. **`lambda` sweep on SafetyPointGoal1** (0, 0.05, 0.1, 0.25), screening each with
+   Step 0. *Gate:* does any `lambda` lift `z_sd_mean` above ~10% of the return
+   scale? If none does, stop using this environment for risk claims and record it.
+2. **Fixed-`beta` vs EVaR, on whichever setting passes (1).** This is the
+   contribution experiment above. Report `x*` trajectories, not just returns.
+3. **Stochastic MuJoCo variant** with reported spread; re-run (2) there. Two
+   independent settings is the minimum for a claim.
+4. **Full risk-measure panel** (mean, EVaR, CVaR, Wang, CPW, fixed-entropic,
+   mean-variance) on the settings that passed, 10 seeds.
+5. **GUARD Chase/Defense integration**, screened on one instance before committing
+   to the matrix.
+6. **Safe Velocity suite** for comparability, run *with* the stochastic variants
+   from (3) rather than stock.
+
+Steps 1-2 are days, not weeks, and they decide whether there is a paper. Everything
+from 3 on is scale-up and should not start before 2 returns.
+
 ## Statistics for the paper
 
 10 seeds, and report IQM with stratified bootstrap CIs (rliable) rather than
-mean ± CI -- the current normal-approximation band over 5 seeds is indicative
-only. Cheap here: these runs are CPU-bound and the box has 10 pinned cores.
+mean ± CI. The current continuous-control numbers are **1-2 seeds and should be read
+as smoke tests, not evidence** -- both reports say so explicitly, and so should any
+draft.
 
-## Sequence
-
-Done:
-
-1. ~~Verify the new eval metrics on one short run~~ -- did that, and it caught a
-   solver that never converged. See "The operator itself" above.
-2. ~~Phase 1 alpha sweep + the `alpha = 1` control -> C1~~ -- ran clean, and
-   returned a **structural null**: CartPole cannot support C1. The `alpha = 1`
-   control is now exact, and the sweep is worth keeping only as a measurement
-   regression test.
-
-3. ~~Gridworld exactness study -> C1 and C3 together.~~ Built, with lotteries that
-   pay (all-risky gives up 6% of mean for 9x the best case) and a graded ground
-   truth of 3, 2, 2, 2, 2, 1, 0 lotteries across alpha. C3 answered above. C1: with
-   the action-value critic, exact regret falls from 4.4-6.4% to **0.1-0.3%** at
-   alpha 0.05-0.3, and -- the bigger result -- policy decisiveness goes from
-   0.10-0.29 to **0.49-0.50** of a maximum 0.5. The old agent was never really
-   choosing.
-
-Now, in order:
-
-4. **The alpha = 0.5 failure mode.** 4 of 5 seeds reach 0.55% regret; one collapses
-   to all-safe at 50.93%, which is exactly the state-value operator's fixed point.
-   Cause is critic coverage: the unchosen action's value is never trained (measured
-   error +46.36 on a never-visited state-action), and once the policy commits at
-   p ~ 0.998 the advantage `Q(s,a) - sum_a pi Q` collapses toward zero, so nothing
-   corrects a wrong commitment. Raising the entropy bonus does not fix it
-   (0.4% -> 0.5% -> 1.4% at 0.05 / 0.2 / 0.5). Needs a coverage mechanism.
-5. **An action-value form for continuous actions.** `C51QCritic` is discrete-action
-   only, so `run_invpend.py` and `run_safety.py` still carry the state-value critic
-   and therefore the C3 defect. Everything queued for Safety-Gymnasium is currently
-   built on the broken form. This blocks the whole continuous-control ladder.
-6. ~~**A learner that can do continuous control.**~~ **Done** -- see "The learner
-   that finally does continuous control" above. What follows was the diagnosis.
-   Measured on `SafetyPointGoal1-v0` at `lambda = 0` -- cost priced at zero, so
-   pure navigation with no risk machinery involved -- reward converges to
-   random-policy level over 1500 episodes and stays: `c51qc` at -0.11 and -0.15,
-   `c51` at -0.19 with one seed diverging to -11.68, against a random-policy probe
-   of +0.05 to -0.10. The environment and the operator are fine; there is no
-   policy. Needed: a proper on-policy update (GAE, clipped objective, several
-   epochs per batch) and vectorized envs, which also fixes the correlated-batch
-   problem. These benchmarks are normally run at 1e6-1e7 steps with PPO/SAC-class
-   algorithms; this is n-step A2C at 800k-1.5M.
-7. ~~**Safety-Gymnasium**: calibrate `lambda`.~~ Attempted, and it is blocked on
-   (6) rather than on anything about the environment. Worth recording that
-   Safety-Gymnasium *does* supply what CartPole could not: cost is non-zero
-   (249-704 episodes per run) and the priced return has genuine spread (sd 8.6 to
-   45.0). But `lambda` cannot be calibrated against a random walk -- cost rose with
-   `lambda` (Goal2: 66.9 -> 92.2 -> 102.1 at 0.1/0.25/0.5) where a policy
-   responding to a price would do the opposite. Redo once (6) lands.
-8. ~~**SPSA head-to-head** on gridworld -> C2.~~ Dropped; C2 argued analytically.
-9. `--risk-objective` switch, then baselines 3 and 4.
-10. Phase 3 MuJoCo with a stochastic variant; Swimmer / HalfCheetah at scale.
+Costing this correctly matters for planning, and the old note here was wrong. The
+A2C runs were CPU-bound and packed 8 to a box; DSAC is GPU-resident and runs at
+49-75 steps/s with EVaR. A 300k-step run is ~1.5 h, so a 10-seed x 2-arm comparison
+on one environment is ~30 GPU-hours, or overnight with a few in parallel. Budget per
+environment, not per run, and screen with Step 0 first so that budget is never spent
+on an environment that cannot discriminate.
