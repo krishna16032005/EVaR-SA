@@ -242,9 +242,10 @@ Lottery gridworld & 3-segment, exact EVaR & Ground truth; where C2 (vs SPSA)
 control): IQN with distortion measures (CVaR, Wang, CPW) --- the standard
 risk-sensitive distributional comparison; fixed-$\beta$ entropic utility --- shows
 the dual solve earns its cost; CVaR-AC; DSAC proper; and WCSAC for the
-safety-constrained framing. \textbf{SPSA head-to-head} at matched sample budget is
-the one that closes C2, and the gridworld is where it is cheap (three-step
-episodes).
+safety-constrained framing. \textbf{No SPSA head-to-head is planned}: the
+sample-efficiency claim is structural ($2N_t$ rollouts per update against one
+backprop) and the original paper's numbers stand for the SPSA side. The reference
+implementation is archived under \texttt{legacy/} if that is revisited.
 
 \textbf{Statistics.} Current continuous-control numbers are 1--2 seeds and should be
 read as smoke tests. Publication needs $\approx 10$ seeds with IQM and stratified

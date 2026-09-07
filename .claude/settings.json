@@ -172,7 +172,13 @@
       "Bash(rm -f g-*.png)",
       "Bash(pdftoppm -png -r 68 -f 3 -l 3 practitioner_guide.pdf gg)",
       "Bash(git fetch *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(grep -v \"^EVaR-DeepRL$\")",
+      "Bash(grep -v \"^\\\\.git$\")",
+      "Bash(pdftoppm -png -r 62 -f 1 -l 1 EVaR-DeepRL/report/evar_deeprl_report.pdf /tmp/c2check)",
+      "Read(//private/tmp/**)",
+      "Bash(ls /tmp/c2check* 2>/dev/null)",
+      "Bash(rm -f /tmp/c2check*.png)"
     ],
     "additionalDirectories": [
       "/private/tmp/claude-501/-Users-deepganguly98-Desktop-EVaR-SA/b3c967c5-5e9a-4310-828e-a365341404af",

@@ -1,1 +1,5 @@
 .DS_Store
+
+# python bytecode (legacy tree shipped these tracked)
+__pycache__/
+*.pyc

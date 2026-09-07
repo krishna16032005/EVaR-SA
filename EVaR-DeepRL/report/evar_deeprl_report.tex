@@ -80,9 +80,10 @@ C1 & The method optimises the intended objective:
      Exact regret $0.00\%$ at all seven $\alpha$ on the lottery gridworld with a
      perfect critic; $\alpha=1$ control exact \\[0.4em]
 C2 & It is cheaper than SPSA at matched sample budget
-   & \opn{} &
-     Not yet run. One backprop replaces $2N_t$ rollouts by construction, but the
-     head-to-head is unexecuted \\[0.4em]
+   & \textcolor{soft}{\textbf{ARGUED}} &
+     Settled analytically by decision, not by a head-to-head: SPSA spends $2N_t$
+     rollouts per update to estimate a scalar, this spends one backprop. The
+     paper's published numbers stand for the SPSA side \\[0.4em]
 C3 & The per-state approximation is sound
    & \closed{} \newline (reformulated) &
      Was not an approximation gap but a \emph{formulation error}. State-value form
@@ -714,8 +715,12 @@ backends. Training reads lidar vectors rather than pixels, so no GL is required.
 
 \subsection{Open}
 \begin{enumerate}[leftmargin=1.5em,itemsep=0.2em]
-\item \textbf{C2: the SPSA head-to-head at matched sample budget.} Not run. The
-      gridworld is where it is runnable --- episodes are three steps. \opn
+\item \textbf{C2 is closed by decision rather than by experiment.} The
+      sample-efficiency argument is structural ($2N_t$ rollouts per update against
+      one backprop) and the paper's own published numbers stand for the SPSA side.
+      Recorded here as a deliberate scope choice, not an oversight: a reviewer who
+      wants the head-to-head can have it cheaply on the gridworld, where episodes
+      are three steps. \textcolor{soft}{\textbf{BY DECISION}}
 \item \textbf{An environment where EVaR beats the alternatives.} This is the
       binding constraint on the paper. The measures are separable in principle
       (\S6.3), but on every environment tested the arms tie, for reasons now
@@ -743,7 +748,6 @@ backends. Training reads lidar vectors rather than pixels, so no GL is required.
       does is an $\alpha$ sweep meaningful.
 \item \textbf{Stochastic environment variants} with the induced return spread
       \emph{reported}, since a reviewer will check exactly that.
-\item \textbf{The SPSA head-to-head on the gridworld} --- closes C2, and is cheap.
 \item \textbf{Adaptive $\beta$}, generalising the scale-adaptive interval into a
       mechanism with an ablation against fixed-$\beta$ entropic utility.
 \item \textbf{Scale to the Safe Velocity suite} (Hopper, HalfCheetah, Swimmer,

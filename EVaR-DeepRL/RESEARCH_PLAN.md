@@ -16,7 +16,7 @@ Three claims have to be defended:
 | Claim | Evidence needed |
 |---|---|
 | C1. It optimizes the same objective | measured `EVaR_alpha` of *trajectory returns* rises; `alpha` monotonically moves the tail; `alpha = 1` recovers risk-neutral |
-| C2. It is cheaper | EVaR vs env-steps against SPSA at a matched sample budget |
+| C2. It is cheaper | **Settled analytically, by decision.** SPSA spends `2*N_t` rollouts per policy update purely to estimate a scalar; the distributional form spends one backprop. The paper's own reported numbers stand for the SPSA side, so no head-to-head is run |
 | C3. The approximation is sound | per-state tilting vs the paper's trajectory-level tilting (Eq. 5) -- quantified where the exact optimum is computable |
 
 **C3 is answered, and it was not an approximation gap.** It was a formulation
@@ -50,8 +50,10 @@ are independent and the objective decouples. It establishes that the state-value
 form is the source of the bias and that the action-value form removes it here, not
 that per-state tilting is exact in general.
 
-SPSA head-to-head at a matched sample budget is still to run, and this is the
-environment where it is actually runnable -- episodes are three steps.
+SPSA head-to-head at a matched sample budget will **not** be run. C2 is argued from
+the structure instead: `2*N_t` rollouts per update against one backprop, with the
+paper's published numbers standing for the SPSA side. The gridworld remains the
+place it *would* have been cheap (three-step episodes) if that is ever revisited.
 
 ## Measuring the objective, not a proxy
 
@@ -111,8 +113,9 @@ the fix.
 
 1. **alpha = 1.0 control** (in the queue now) -- must match risk-neutral. Free, and
    invalidates everything if it fails.
-2. **SPSA (`../_spsa.py`, the paper's own code)** -- same env, same sample budget.
-   This is C2, and the reason the paper exists.
+2. ~~**SPSA (the paper's own code)** -- same env, same sample budget.~~ **Dropped.**
+   C2 is argued analytically (see the claims table). The code now lives in
+   `../../legacy/` if this is revisited.
 3. **Risk-neutral A2C with the same nets** -- isolates the EVaR operator from the
    distributional critic. Needs a `--risk-objective {evar,mean}` switch (not yet
    implemented).
@@ -121,8 +124,8 @@ the fix.
 5. **IQN with distortion measures** (Dabney et al. 2018: CVaR, Wang, CPW) -- the
    standard risk-sensitive distributional RL comparison, and what "SOTA baseline"
    means to this audience.
-6. **CVaR-AC** -- you already have `../swimmer_cvar.py` and
-   `../gridworld_reinforce_cvar.py`; port the objective, reuse the harness.
+6. **CVaR-AC** -- harness available at `../../legacy/swimmer_cvar.py` and
+   `../../legacy/gridworld/`; port the objective, reuse the harness.
 7. **DSAC / risk-sensitive SAC** -- ~~only once continuous-control envs are the
    focus~~. Built (`agents/dsac_evar.py`), and it is now *our own learner* rather
    than an external baseline: IQN action-value critic, twin critics with the min
@@ -131,11 +134,11 @@ the fix.
 
 ## The environment ladder
 
-1. **Gridworld** -- exact EVaR; C3 verification against SPSA and the optimum
+1. **Gridworld** -- exact EVaR; C3 verification against the exact optimum
 2. **CartPole / Pendulum** -- plumbing only. **Settled: CartPole cannot support C1.**
 3. **Safety-Gymnasium** -- stochastic hazards, real catastrophic events
 4. **InvertedPendulum, InvertedDoublePendulum** -- the paper's envs (phase 3 in the queue)
-5. **Swimmer, HalfCheetah** -- head-to-head with the existing SPSA results
+5. **Swimmer, HalfCheetah** -- comparable to the paper's published SPSA results
 6. **Deliberately stochastic variants** -- see below
 
 **Why CartPole is finished as evidence.** Three compounding reasons, and the third
@@ -400,6 +403,6 @@ Now, in order:
    45.0). But `lambda` cannot be calibrated against a random walk -- cost rose with
    `lambda` (Goal2: 66.9 -> 92.2 -> 102.1 at 0.1/0.25/0.5) where a policy
    responding to a price would do the opposite. Redo once (6) lands.
-8. **SPSA head-to-head** on gridworld at a matched sample budget -> C2.
+8. ~~**SPSA head-to-head** on gridworld -> C2.~~ Dropped; C2 argued analytically.
 9. `--risk-objective` switch, then baselines 3 and 4.
 10. Phase 3 MuJoCo with a stochastic variant; Swimmer / HalfCheetah at scale.
