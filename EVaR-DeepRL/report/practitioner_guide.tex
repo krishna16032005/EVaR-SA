@@ -1,0 +1,262 @@
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[margin=1.75cm]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[colorlinks=true,linkcolor=black,urlcolor=blue]{hyperref}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{tcolorbox}
+
+\definecolor{ok}{HTML}{1BAF7A}
+\definecolor{open}{HTML}{EB6834}
+\definecolor{soft}{HTML}{52514E}
+
+\newcommand{\evar}{\mathrm{EVaR}}
+\newcommand{\cvar}{\mathrm{CVaR}}
+\newcommand{\yes}{\textcolor{ok}{\textbf{done}}}
+\newcommand{\todo}{\textcolor{open}{\textbf{todo}}}
+
+\titleformat{\section}{\large\bfseries}{\thesection}{0.5em}{}
+\titlespacing{\section}{0pt}{1.1em}{0.4em}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.5em}{}
+\titlespacing{\subsection}{0pt}{0.8em}{0.3em}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small\textcolor{soft}{DSAC-EVaR --- practitioner's guide}}
+\rhead{\small\textcolor{soft}{\thepage}}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\setlength{\parskip}{0.35em}
+\setlength{\parindent}{0pt}
+
+\begin{document}
+
+\begin{center}
+{\Large\textbf{DSAC-EVaR: a practitioner's guide}}\\[0.3em]
+{\small\textcolor{soft}{Risk-seeking Entropic Value-at-Risk in an off-policy
+distributional actor--critic --- what the algorithm is, how to set it up, and what
+is left to run}}
+\end{center}
+
+\vspace{-0.3em}
+\hrule
+\vspace{0.6em}
+
+\section{The algorithm in one page}
+
+Standard SAC, with two substitutions: the critic returns a \emph{distribution} over
+returns instead of a scalar, and the actor maximises a \emph{risk functional} of
+that distribution instead of its mean.
+
+\vspace{-0.2em}
+\begin{tcolorbox}[colback=white,colframe=soft!30,boxrule=0.5pt,left=6pt,right=6pt,top=4pt,bottom=4pt]
+\small
+\textbf{Risk functional (the only genuinely new part).} For return samples $Z$ and
+level $\alpha$:
+\vspace{-0.4em}
+\begin{equation*}
+\evar_\alpha[Z] = \min_{x>0} G(x), \qquad
+G(x) = x\Big(\log \mathbb{E}\big[e^{Z/x}\big] - \log\alpha\Big), \qquad x = 1/\beta .
+\end{equation*}
+\vspace{-1.0em}
+\begin{itemize}[leftmargin=1.2em,itemsep=0.1em,topsep=0.2em]
+\item $G$ is strongly convex $\Rightarrow$ $G'$ monotone $\Rightarrow$
+      \textbf{bisect $G'$ in $\log x$}. 20 steps. Never Newton (see \S4).
+\item Search interval \textbf{per row}: $[10^{-3}\,\mathrm{sd}(Z),\;
+      10^{3}\,\mathrm{sd}(Z)]$. Not a constant (see \S4).
+\item \textbf{Detach $x^\ast$.} Envelope theorem gives exact gradients without
+      unrolling the solver.
+\item If $p_{\max}\ge\alpha$, return $\max(Z)$ exactly --- no interior optimum exists.
+\end{itemize}
+\end{tcolorbox}
+
+\vspace{-0.4em}
+\begin{algorithm}[H]
+\small
+\caption{DSAC-EVaR update (one env step $=$ one update)}
+\begin{algorithmic}[1]
+\State Sample minibatch $(s,a,r,c,s',d)$ from replay; \quad $r_{\text{eff}} \gets r - \lambda c$
+\State $a' \sim \pi_\phi(\cdot|s')$ \Comment{tanh-squashed Gaussian}
+\State $y_j \gets r_{\text{eff}} + \gamma(1-d)\big(\min_{k\in\{1,2\}} Z^{\text{targ}}_{k,\tau_j}(s',a') - \eta\log\pi_\phi(a'|s')\big)$
+       \Comment{$d$ = \textbf{terminated} only}
+\State $\mathcal{L}_Z \gets \sum_{k}\mathrm{QuantileHuber}\big(Z_k(s,a),\, y\big)$;\quad update both critics
+\State $\tilde a \sim \pi_\phi(\cdot|s)$;\quad $z \gets \big[Z_1(s,\tilde a);\, Z_2(s,\tilde a)\big]$
+       \Comment{stack $(2B,K)$: one solve, not two}
+\State $\rho \gets \rho_\alpha(z)$ \Comment{$\evar$ via bisection, or mean/$\cvar$/Wang/\dots}
+\State $\mathcal{L}_\pi \gets \mathbb{E}\big[\eta\log\pi_\phi(\tilde a|s) - \min_k \rho_k\big]$;\quad update actor
+\State $\mathcal{L}_\eta \gets -\eta\big(\log\pi_\phi(\tilde a|s) + \bar{\mathcal{H}}\big)$;\quad update temperature,
+       $\bar{\mathcal{H}} = -\dim(\mathcal{A})$
+\State Polyak-update targets, $\tau = 0.005$
+\end{algorithmic}
+\end{algorithm}
+
+\vspace{-0.6em}
+\textbf{The one structural requirement: the critic must be $Z(s,a)$, not $Z(s)$.}
+$\evar$ is translation-equivariant, so $\evar(r + Z(s')) \equiv r + \evar(Z(s'))$
+for a \emph{sampled scalar} $r$ --- the tilt never touches the reward, and at a
+terminal step $\alpha$ drops out entirely. Measured exact regret: $86.35\%$ with
+the state-value form, $0.00\%$ with the action-value form. Everything else here is
+a detail; this one is the method.
+
+\section{Model setup}
+
+\begin{center}
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Component} & \textbf{Setting} & \textbf{Component} & \textbf{Setting} \\
+\midrule
+Critic & IQN, $Z(s,a)$, twin & Optimiser & Adam, $3\times10^{-4}$ (all three) \\
+\quad hidden & $(256,256)$ ReLU & Batch & 256 \\
+\quad embedding & 128 & Replay & $10^{6}$ \\
+\quad $n_{\cos}$ & 64 & $\gamma$ & 0.99 \\
+\quad Huber $\kappa$ & 1.0 & Polyak $\tau$ & 0.005 \\
+\quad $K$ critic/target & 32 / 32 & Updates per env step & 1 \\
+\quad $K$ risk & \textbf{64} & Warm-up (random actions) & 2k--5k steps \\
+Actor & tanh-Gaussian & Target entropy & $-\dim(\mathcal{A})$, auto-tuned \\
+\quad hidden & $(256,256)$ ReLU & $\alpha$ (risk level) & 0.1 \\
+\quad $\log\sigma$ clamp & $[-20, 2]$ & Bisection steps & 20 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Swap the risk functional, keep everything else.} \texttt{--risk mean} is the
+risk-neutral control sharing critic, actor, data and seeds. Run it every time: it is
+the only thing that lets you attribute a difference to the risk measure rather than
+to the algorithm. Also available: \texttt{cvar}, \texttt{wang}, \texttt{cpw},
+\texttt{entropic} (fixed $\beta$), \texttt{meanvar}.
+
+\section{Critical stats}
+
+\begin{center}
+\small
+\begin{tabular}{@{}llrrl@{}}
+\toprule
+\textbf{Setting} & \textbf{Arm} & \textbf{Return} & \textbf{Paired gap} & \textbf{Reading} \\
+\midrule
+Lottery gridworld & state-value $Z(s)$ & --- & $-86.35\%$ & the formulation error \\
+(exact, no learning) & action-value $Z(s,a)$ & --- & $\mathbf{0.00\%}$ & exact at all 7 $\alpha$ \\
+\midrule
+Pendulum-v1 & \texttt{mean} s0/s1 & $-96.99$ / $-152.44$ & --- & solved ($\approx-1200$ random) \\
+(60k steps) & $\evar_{0.1}$ s0/s1 & $-96.36$ / $-151.92$ & $+0.63$ / $+0.52$ & ties, correctly \\
+\midrule
+SafetyPointGoal1 & \texttt{mean} & $26.99$ (cost 56.3) & --- & A2C never left random \\
+(300k, $\lambda=0$) & $\evar_{0.1}$ & $27.39$ (cost 49.3) & $+0.40$ & ties, environment's fault \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Why the ties are not failures.} Pendulum's return spread is policy noise,
+not risk in the world. On SafetyPointGoal1 the measured spread of the critic's
+distribution is $\mathrm{sd}(Z)\approx 0.022$ against episode returns near $27$ ---
+\textbf{under 1\%}. With no spread there is no tail to trade, so every risk attitude
+ties by construction. Both operator health checks pass in the same runs
+(\texttt{at\_bound\_frac}$=0$, \texttt{top\_mass\_frac}$=0.017\approx 1/K$), which is
+what makes that conclusion safe rather than a guess.
+
+\textbf{Throughput} (A40, batch 256): Pendulum $\evar$ 75 steps/s vs \texttt{mean}
+112; SafetyPointGoal1 49 vs 63. MuJoCo itself runs at 617 steps/s, so the learner is
+always the bottleneck --- the EVaR solve costs $12\%$ on CPU, the rest is GPU
+kernel-launch overhead.
+
+\section{Six things that will bite you}
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=0.25em]
+\item \textbf{$\alpha > 1/K$, always.} The top of $K$ samples carries mass $1/K$;
+      once that reaches $\alpha$ the dual runs to $x_{\min}$ and $\evar$ collapses
+      onto $\max(Z)$. At $K=64$ the floor is $\alpha>0.0156$. Binds independently on
+      the evaluation sample size.
+\item \textbf{Never a fixed $[x_{\min},x_{\max}]$.} $x^\ast$ has \emph{units of
+      return} ($x^\ast\approx 0.34\,\mathrm{sd}(Z)$). A fixed interval works at one
+      return scale and silently turns $\evar$ into
+      $\text{mean} + x_{\min}\log(1/\alpha)$ --- fixed-$\beta$ entropic utility,
+      i.e.\ your own baseline. Measured error up to $1100\%$ at
+      $\mathrm{sd}(Z)=10^{-3}$.
+\item \textbf{Bisection, not Newton.} When the tilted measure collapses onto one
+      atom, $G''=\mathrm{Var}_{Q_x}/x^3$ underflows, the step explodes, projects onto
+      a bound, and cycles forever. Newton returned a \emph{constant} $x^\ast=0.301$
+      across different distributions and inflated $\evar$ by $25$--$590\%$.
+\item \textbf{Mask zero-probability atoms to $-\infty$; do not
+      \texttt{clamp\_min(1e-12)}.} The tilt multiplies invented mass by
+      $e^{z_{\max}/x}$ --- a factor of $e^{45}$ in a realistic case, worth $+13.3\%$
+      on $\evar$.
+\item \textbf{Size a categorical support in \emph{discounted} units} if you use
+      C51 at all. Undiscounted episode return left $\approx 9$ of $51$ atoms
+      carrying mass. IQN avoids the problem entirely --- prefer it.
+\item \textbf{Leave \texttt{MUJOCO\_GL} unset} for headless Safety-Gymnasium
+      training. EGL or OSMesa in the same process as a CUDA context segfaults
+      (rc 139). Lidar observations need no GL. Also: safety-gymnasium pins
+      \texttt{gymnasium 0.28.1}, so it needs its own venv \emph{with its own CUDA
+      torch build}.
+\end{enumerate}
+
+\textbf{Instrument all of this.} Log \texttt{at\_bound\_frac} ($0$ for $\alpha<1$),
+\texttt{top\_mass\_frac} (near $1/K$), and \texttt{z\_sd\_mean} (says whether the
+environment can support the experiment \emph{before} you spend a day on it). Each
+was added after the fault it detects had already cost real time. Validate the
+diagnostics themselves against known answers --- our first bound-check compared the
+solution to itself and reported every solve as broken.
+
+\section{What remains: benchmarks and baselines}
+
+The evaluation gap is the whole gap. The operator is correct; what is missing is a
+setting where an \emph{adaptive} tilt beats a fixed one, plus the standard
+comparisons. Framed as an agent $\times$ task $\times$ constraint matrix, in the
+style of GUARD (arXiv:2305.13681):
+
+\begin{center}
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Suite} & \textbf{Instances} & \textbf{Why it matters here} & \textbf{Status} \\
+\midrule
+Safe Navigation & PointGoal1/2, CarGoal, & Stochastic hazards; needs
+  $\lambda>0$ & PointGoal1 \yes \\
+(Safety-Gym) & PointPush, PointButton, Circle & to create return spread & rest \todo \\[0.3em]
+Safe Velocity & Hopper, HalfCheetah, Swimmer, & What recent risk-sensitive
+  papers & \todo \\
+& Walker2d, Ant & report; direct comparability & \\[0.3em]
+GUARD & 8 agents (Swimmer, Ant, Walker, & Systematic difficulty sweep;
+  3D & \todo \\
+& Humanoid, Hopper, Arm3, Arm6, & constraints and \emph{interactive}
+  (Chase, & \\
+& Drone) $\times$ Goal/Push/Chase/Defense & Defense) tasks are genuinely
+  stochastic & \\
+& $\times$ 8 constraint types (Hazards, & --- the property our current envs
+  lack & \\
+& Ghosts, 3D variants) & & \\[0.3em]
+Lottery gridworld & 3-segment, exact EVaR & Ground truth; where C2 (vs SPSA)
+  & \yes \\
+& & is actually runnable & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Baselines still to implement} (all against the shared \texttt{--risk mean}
+control): IQN with distortion measures (CVaR, Wang, CPW) --- the standard
+risk-sensitive distributional comparison; fixed-$\beta$ entropic utility --- shows
+the dual solve earns its cost; CVaR-AC; DSAC proper; and WCSAC for the
+safety-constrained framing. \textbf{SPSA head-to-head} at matched sample budget is
+the one that closes C2, and the gridworld is where it is cheap (three-step
+episodes).
+
+\textbf{Statistics.} Current continuous-control numbers are 1--2 seeds and should be
+read as smoke tests. Publication needs $\approx 10$ seeds with IQM and stratified
+bootstrap CIs (rliable), not mean $\pm$ CI over 5.
+
+\vspace{0.4em}
+\hrule
+\vspace{0.4em}
+\textcolor{soft}{\small\textbf{Next action.} Sweep $\lambda$ on
+SafetyPointGoal1 and re-screen with a 40k-step probe reading
+\texttt{z\_sd\_mean}. If pricing cost does not raise $\mathrm{sd}(Z)$ to a usable
+fraction of the return scale, no $\alpha$ sweep on that environment can mean
+anything, and the effort belongs in GUARD's interactive tasks instead.}
+
+\end{document}
