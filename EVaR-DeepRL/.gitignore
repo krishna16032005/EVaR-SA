@@ -9,3 +9,6 @@ checkpoints/
 automation/state/
 automation/logs/
 automation/.hostkeys/
+report/*.aux
+report/*.log
+report/*.out
